@@ -70,8 +70,10 @@ class System:
         self.watchdog = Watchdog(self.fsm, self.arm, self.camera, self.log)
         if opts.esp32 is not None:
             cfg.esp32.enabled = opts.esp32
-        self.esp32 = Esp32(cfg.esp32, lambda: self.fsm.post("button", source="button"),
-                           lambda env: self.fsm.post("piezo", envelope=env))
+        btn_event = "go" if cfg.esp32.button_role == "go" else "button"
+        self.esp32 = Esp32(cfg.esp32, lambda: self.fsm.post(btn_event, source="button"),
+                           lambda env: self.fsm.post("piezo", envelope=env), self.on_stop_switch)
+        self._switch_prev: Optional[bool] = None
         if opts.voice is not None:
             cfg.voice.enabled = opts.voice
         self.voice = VoiceListener(cfg, lambda cmd, text, conf: self.fsm.post(cmd, source="voice"), self.log)
@@ -79,6 +81,24 @@ class System:
         self.calib_samples: list[dict] = []
         self.summary_outbox: list[dict] = []
         self.started_at = time.time()
+
+    def on_stop_switch(self, closed: Optional[bool]) -> None:
+        """ESP32 STOP input. closed=None means the switch can't be read (device lost after it was connected).
+
+        rocker: closed (I) = run, open (O) or unreadable = STOP, held while off. Called every heartbeat as well as
+                on change, so the level is re-asserted. Flipping back on arms the release (like a STOP press);
+                the UI confirm then releases.
+        button: closed = pressed = STOP; a press while STOPPED arms the release.
+        """
+        mode = self.cfg.esp32.stop_switch
+        prev, self._switch_prev = self._switch_prev, closed
+        if mode == "rocker":
+            # through the FSM queue (not set here) so a UI confirm queued while the switch was off is judged
+            # against the switch state at the time, in order
+            self.fsm.post("stop_switch", off=closed is not True, lost=closed is None)
+        elif mode == "button":
+            if closed is True and prev is not True:
+                self.fsm.post("stop", source="button")
 
     @property
     def is_sim(self) -> bool:

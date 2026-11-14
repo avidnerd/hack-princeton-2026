@@ -34,6 +34,9 @@ def fast_cfg(tmp_path):
     c.face.mouth_open_hold_s = 0.05
     c.fsm.pre_delivery_timeout_s = 3
     c.offsets.joint_map = str(tmp_path / "no_map.json")
+    c.gate.require_go = False          # GO-button behaviour has its own tests (test_go_button.py)
+    c.esp32.button_role = "stop"
+    c.esp32.stop_switch = "none"        # STOP-switch behaviour has its own tests (test_stop_switch.py)
     return c
 
 

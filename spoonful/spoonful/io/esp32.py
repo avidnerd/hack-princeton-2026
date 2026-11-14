@@ -35,9 +35,11 @@ def find_port() -> Optional[str]:
 
 
 class Esp32:
-    def __init__(self, cfg: Esp32Cfg, on_button: Callable[[], None], on_piezo: Callable[[float], None]):
+    def __init__(self, cfg: Esp32Cfg, on_button: Callable[[], None], on_piezo: Callable[[float], None],
+                 on_switch: Callable[[Optional[bool]], None] = lambda closed: None):
         self.cfg = cfg
-        self.on_button, self.on_piezo = on_button, on_piezo
+        self.on_button, self.on_piezo, self.on_switch = on_button, on_piezo, on_switch
+        self.switch_closed: Optional[bool] = None   # None = not known (never connected, or connection lost)
         self.port: Optional[str] = None
         self.connected = False
         self.last_hb = 0.0
@@ -67,6 +69,9 @@ class Esp32:
             self.on_piezo(self.last_envelope)
         if "hb" in msg:
             self.last_hb = time.time()
+        if "sw" in msg:
+            self.switch_closed = bool(msg["sw"])
+            self.on_switch(self.switch_closed)
 
     def _loop(self) -> None:
         import serial
@@ -88,10 +93,14 @@ class Esp32:
                             break   # silent device: reopen
             except Exception:
                 pass
+            if self.connected:
+                self.switch_closed = None
+                self.on_switch(None)        # lost the device: the STOP switch can no longer be read
             self.connected = False
             time.sleep(2)
 
     def status(self) -> dict:
         return {"enabled": self.cfg.enabled, "connected": self.connected, "port": self.port,
                 "presses": self.presses, "envelope": round(self.last_envelope),
+                "stop_switch": self.cfg.stop_switch, "switch_closed": self.switch_closed,
                 "hb_age_s": round(time.time() - self.last_hb, 1) if self.last_hb else None}

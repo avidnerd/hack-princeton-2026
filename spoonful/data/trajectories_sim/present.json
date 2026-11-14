@@ -2,7 +2,7 @@
  "name": "present",
  "kind": "path",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,17 +10,17 @@
   {
    "t": 0.0,
    "deg": {
-    "base": 0.0,
-    "shoulder": -39.1,
-    "elbow": 83.19,
-    "wrist_pitch": 45.9,
+    "base": -90.7,
+    "shoulder": 30.44,
+    "elbow": -71.99,
+    "wrist_pitch": 43.35,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 337,
-    "elbow": 847,
-    "wrist_pitch": 691,
+    "base": 122,
+    "shoulder": 627,
+    "elbow": 200,
+    "wrist_pitch": 681,
     "wrist_roll": 500
    },
    "speed": "near_face"
@@ -28,17 +28,17 @@
   {
    "t": 0.1,
    "deg": {
-    "base": 0.0,
-    "shoulder": -18.28,
-    "elbow": 75.52,
-    "wrist_pitch": 32.76,
+    "base": -90.7,
+    "shoulder": 7.24,
+    "elbow": -55.9,
+    "wrist_pitch": 36.23,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 424,
-    "elbow": 815,
-    "wrist_pitch": 636,
+    "base": 122,
+    "shoulder": 530,
+    "elbow": 267,
+    "wrist_pitch": 651,
     "wrist_roll": 500
    },
    "speed": "near_face"
@@ -46,17 +46,17 @@
   {
    "t": 0.2,
    "deg": {
-    "base": 0.0,
-    "shoulder": 3.75,
-    "elbow": 56.79,
-    "wrist_pitch": 29.46,
+    "base": -90.7,
+    "shoulder": -6.14,
+    "elbow": -40.61,
+    "wrist_pitch": 38.15,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 516,
-    "elbow": 737,
-    "wrist_pitch": 623,
+    "base": 122,
+    "shoulder": 474,
+    "elbow": 331,
+    "wrist_pitch": 659,
     "wrist_roll": 500
    },
    "speed": "near_face"

@@ -57,12 +57,30 @@ def parse_command(text: str, cfg: VoiceCfg, require_wake: bool = True) -> Option
     return best[1] if best else None
 
 
+def _import_whisper():
+    """faster_whisper imports PyAV (ffmpeg DLLs) at import time, only for decoding audio files. We pass numpy arrays,
+    so PyAV is never used. Windows Smart App Control blocks PyAV's DLLs ("An Application Control policy has blocked
+    this file"); in that case stand in an empty module so the import succeeds without loading them."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as e:
+        if "av" not in repr(e) and "_core" not in repr(e):
+            raise
+        import sys
+        import types
+        for m in [k for k in sys.modules if k == "av" or k.startswith("av.") or k.startswith("faster_whisper")]:
+            del sys.modules[m]
+        sys.modules["av"] = types.ModuleType("av")
+        from faster_whisper import WhisperModel
+    return WhisperModel
+
+
 class Transcriber:
     def __init__(self, cfg: VoiceCfg):
         self.cfg = cfg
         self.model = None
         if cfg.backend == "faster_whisper":
-            from faster_whisper import WhisperModel
+            WhisperModel = _import_whisper()
             self.model = WhisperModel(cfg.model, device="cpu", compute_type="int8")
 
     def __call__(self, audio: np.ndarray) -> tuple[str, float]:

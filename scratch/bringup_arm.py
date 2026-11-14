@@ -13,6 +13,11 @@ import sys
 import time
 
 IDS = [1, 2, 3, 4, 5, 6]
+
+
+def signed16(v):
+    """Past the 0 end the servo reports e.g. 65533 for -3: decode as signed."""
+    return None if v is None else (v - 65536 if v > 32767 else v)
 VID, PID = 0x0483, 0x5750
 JOG_UNITS = 42  # ~10 deg at 0.24 deg/unit (240 deg servo); the xarm pkg itself assumes 250 deg (0.25/unit)
 
@@ -31,7 +36,7 @@ class XarmPkg:
         # _recv() can raise IndexError when the 50 ms HID read returns nothing: retry.
         for _ in range(3):
             try:
-                return self.c.getPosition(sid)
+                return signed16(self.c.getPosition(sid))
             except Exception:
                 time.sleep(0.01)
         return None
@@ -70,7 +75,7 @@ class RawHid:
     def pos(self, sid):
         self._send(self.POSREAD, [1, sid])
         r = self._recv(self.POSREAD)
-        return None if not r else r[3] * 256 + r[2]
+        return None if not r else signed16(r[3] * 256 + r[2])
 
     def off(self):
         self._send(self.UNLOAD, [6, *IDS])
@@ -97,7 +102,7 @@ def cmd_probe(arm):
 def cmd_watch(arm):
     arm.off()
     print("torque OFF. Move each joint by hand, one at a time, end stop to end stop. Ctrl-C to finish.")
-    lo, hi = {i: 1001 for i in IDS}, {i: -1 for i in IDS}
+    lo, hi = {i: 99999 for i in IDS}, {i: -99999 for i in IDS}
     try:
         while True:
             t0 = time.time()
@@ -125,7 +130,12 @@ def cmd_jog(arm, live):
         if p0 is None:
             print(f"id {sid}: no read, skipped")
             continue
-        seq = [min(1000, p0 + JOG_UNITS), max(0, p0 - JOG_UNITS), p0]
+        if not JOG_UNITS + 20 <= p0 <= 1000 - JOG_UNITS - 20:
+            # past the servo's 0..1000 command range: any command would jump, not jog
+            print(f"id {sid}: at {p0}, too close to or past the servo's 0..1000 range. SKIPPED. "
+                  "Move this joint by hand toward the middle of its travel and re-run.")
+            continue
+        seq = [p0 + JOG_UNITS, p0 - JOG_UNITS, p0]
         print(f"id {sid}: {p0} -> {seq[0]} -> {seq[1]} -> {seq[2]}  (1.5 s each)")
         if not live:
             continue

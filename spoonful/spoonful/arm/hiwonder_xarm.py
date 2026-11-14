@@ -16,6 +16,11 @@ from typing import Optional
 from .backend import ArmBackend, BackendError
 
 
+def _s16(v: int) -> int:
+    """Just past the 0 end a servo reports e.g. 65533 for -3: decode as signed 16-bit."""
+    return v - 65536 if v > 32767 else v
+
+
 class XarmBackend(ArmBackend):
     name = "xarm"
 
@@ -46,14 +51,14 @@ class XarmBackend(ArmBackend):
             for _ in range(self.retries + 1):
                 try:
                     self.c.getPosition(servos)
-                    return {s.servo_id: int(s.position) for s in servos}
+                    return {s.servo_id: _s16(int(s.position)) for s in servos}
                 except Exception:
                     time.sleep(0.005)
             # fall back to single reads so one dead servo doesn't blind us to the rest
             out: dict[int, Optional[int]] = {}
             for i in ids:
                 try:
-                    out[i] = int(self.c.getPosition(i))
+                    out[i] = _s16(int(self.c.getPosition(i)))
                 except Exception:
                     out[i] = None
             return out

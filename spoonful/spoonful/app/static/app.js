@@ -106,6 +106,8 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); post("stop", { source: "key" }); }
   else if (e.key === "o") toggleDrawer();
   else if (e.key === "b") post("bite");
+  // GO: Enter, or either button of a wireless presenter clicker (they send PageDown / PageUp)
+  else if (e.key === "Enter" || e.key === "PageDown" || e.key === "PageUp") { e.preventDefault(); post("go", { source: "key" }); }
   else if (e.key === "p") $("btn-pause").click();
   else if (e.key === "Escape") { pick = null; updatePick(); }
 });

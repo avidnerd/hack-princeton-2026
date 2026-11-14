@@ -2,7 +2,7 @@
  "name": "pre_delivery",
  "kind": "pose",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,17 +10,17 @@
   {
    "t": 0.0,
    "deg": {
-    "base": 0.0,
-    "shoulder": -39.1,
-    "elbow": 83.19,
-    "wrist_pitch": 45.9,
+    "base": -90.7,
+    "shoulder": 30.44,
+    "elbow": -71.99,
+    "wrist_pitch": 43.35,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 337,
-    "elbow": 847,
-    "wrist_pitch": 691,
+    "base": 122,
+    "shoulder": 627,
+    "elbow": 200,
+    "wrist_pitch": 681,
     "wrist_roll": 500
    },
    "speed": "near_face"

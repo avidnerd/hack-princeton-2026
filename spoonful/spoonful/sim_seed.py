@@ -36,18 +36,18 @@ def seed(cfg: Config) -> list[str]:
     out = []
     P = lambda r, z, p, b=0.0: ik(cfg, r, z, p, b)  # noqa: E731
     rest = dict(cfg.arm.home_pose)
-    above_bowl = P(190, 175, 110, -40)
+    above_bowl = P(190, 175, 110, +40)
     poses = {
         "rest": [rest],
         "pre_delivery": [P(215, 250, 90)],
-        "mouth_nominal": [P(300, 250, 90)],
+        "mouth_nominal": [P(280, 250, 90)],
     }
-    scoop_end = P(210, 185, 112, -40)
+    scoop_end = P(210, 185, 112, +40)
     paths = {
-        "scoop": [rest, above_bowl, P(195, 135, 125, -40), P(220, 140, 120, -40), scoop_end],
-        "scoop_small": [rest, above_bowl, P(205, 150, 120, -40), scoop_end],
-        "scoop_full": [rest, above_bowl, P(195, 130, 128, -40), P(222, 138, 122, -40), scoop_end],
-        "lift": [scoop_end, P(205, 225, 100, -30), P(210, 245, 92, -10), poses["pre_delivery"][0]],
+        "scoop": [rest, above_bowl, P(195, 135, 125, +40), P(220, 140, 120, +40), scoop_end],
+        "scoop_small": [rest, above_bowl, P(205, 150, 120, +40), scoop_end],
+        "scoop_full": [rest, above_bowl, P(195, 130, 128, +40), P(222, 138, 122, +40), scoop_end],
+        "lift": [scoop_end, P(205, 225, 100, +30), P(210, 245, 92, +10), poses["pre_delivery"][0]],
         "present": [poses["pre_delivery"][0], P(260, 250, 90), poses["mouth_nominal"][0]],
         "retreat": [poses["pre_delivery"][0], P(205, 255, 92), rest],
     }

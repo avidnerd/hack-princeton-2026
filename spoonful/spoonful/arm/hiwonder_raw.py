@@ -65,7 +65,8 @@ class RawHidBackend(ArmBackend):
             for k in range(n):
                 base = 1 + 3 * k
                 if base + 2 < len(r):
-                    out[r[base]] = r[base + 1] | (r[base + 2] << 8)
+                    v = r[base + 1] | (r[base + 2] << 8)
+                    out[r[base]] = v - 65536 if v > 32767 else v  # signed: -3 arrives as 65533
         return out
 
     def move(self, pairs, duration_ms):

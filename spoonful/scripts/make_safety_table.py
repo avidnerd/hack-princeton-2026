@@ -40,7 +40,8 @@ Deny reasons: {", ".join(f"`{r}`" for r in REASONS)}.
 | Layer | Trigger | Effect |
 |---|---|---|
 | Power rocker switch | hand | servos lose power. Independent of all software. |
-| STOP button (ESP32) / spacebar / voice "stop" / UI STOP | diner, caregiver | STOPPED: hold, torque off after {a.stop_torque_off_after_s} s, latched. Release = physical press + UI confirm within {fs.stop_release_window_s:.0f} s, then slow HOMING. |
+| STOP switch (ESP32 GPIO 5: rocker at O, wire broken, or ESP32 lost) | diner, caregiver | STOPPED within one serial message (ms), held while the switch is off; flipping it back on arms the release. |
+| STOP button (ESP32) / spacebar / voice "stop" / UI STOP | diner, caregiver | STOPPED: hold, torque off after {a.stop_torque_off_after_s} s, latched. Release = STOP press, spacebar or switch back on + UI confirm within {fs.stop_release_window_s:.0f} s, then slow HOMING. A GO press never stops or releases. |
 | Gate deny while DELIVERING | diner turns away, closes mouth, leaves | hold, back off {g.backoff_mm:.0f} mm; a second loss in one bite retreats. |
 | Contact (commanded vs actual > {a.contact_error_deg} deg for {a.contact_hold_s} s) | spoon meets resistance | near face: retreat; elsewhere: FAULT + park. |
 | Watchdog | FSM stalled 250 ms / camera gone 500 ms mid-bite / no arm reads 500 ms | hold then park; FAULT. |

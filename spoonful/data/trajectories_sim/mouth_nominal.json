@@ -2,7 +2,7 @@
  "name": "mouth_nominal",
  "kind": "pose",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,17 +10,17 @@
   {
    "t": 0.0,
    "deg": {
-    "base": 0.0,
-    "shoulder": 3.75,
-    "elbow": 56.79,
-    "wrist_pitch": 29.46,
+    "base": -90.7,
+    "shoulder": -6.14,
+    "elbow": -40.61,
+    "wrist_pitch": 38.15,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 516,
-    "elbow": 737,
-    "wrist_pitch": 623,
+    "base": 122,
+    "shoulder": 474,
+    "elbow": 331,
+    "wrist_pitch": 659,
     "wrist_roll": 500
    },
    "speed": "near_face"

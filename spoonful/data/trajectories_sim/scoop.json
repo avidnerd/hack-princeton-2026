@@ -2,7 +2,7 @@
  "name": "scoop",
  "kind": "path",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,35 +10,35 @@
   {
    "t": 0.0,
    "deg": {
-    "base": 0.0,
-    "shoulder": -30.0,
-    "elbow": 70.0,
-    "wrist_pitch": 40.0,
-    "wrist_roll": 0.0
+    "base": -90.7,
+    "shoulder": 63.4,
+    "elbow": -64.3,
+    "wrist_pitch": 87.6,
+    "wrist_roll": -6.5
    },
    "units": {
-    "base": 500,
-    "shoulder": 375,
-    "elbow": 792,
-    "wrist_pitch": 667,
-    "wrist_roll": 500
+    "base": 122,
+    "shoulder": 764,
+    "elbow": 232,
+    "wrist_pitch": 865,
+    "wrist_roll": 473
    },
    "speed": "normal"
   },
   {
    "t": 0.1,
    "deg": {
-    "base": -40.0,
-    "shoulder": -48.22,
-    "elbow": 83.53,
-    "wrist_pitch": 74.69,
+    "base": -50.7,
+    "shoulder": 44.01,
+    "elbow": -81.84,
+    "wrist_pitch": 67.07,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 333,
-    "shoulder": 299,
-    "elbow": 848,
-    "wrist_pitch": 811,
+    "base": 289,
+    "shoulder": 683,
+    "elbow": 159,
+    "wrist_pitch": 779,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -46,17 +46,17 @@
   {
    "t": 0.2,
    "deg": {
-    "base": -40.0,
-    "shoulder": -33.93,
-    "elbow": 72.97,
-    "wrist_pitch": 85.96,
+    "base": -50.7,
+    "shoulder": 31.35,
+    "elbow": -71.9,
+    "wrist_pitch": 79.34,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 333,
-    "shoulder": 359,
-    "elbow": 804,
-    "wrist_pitch": 858,
+    "base": 289,
+    "shoulder": 631,
+    "elbow": 200,
+    "wrist_pitch": 831,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -64,17 +64,17 @@
   {
    "t": 0.30000000000000004,
    "deg": {
-    "base": -40.0,
-    "shoulder": -31.61,
-    "elbow": 82.5,
-    "wrist_pitch": 69.11,
+    "base": -50.7,
+    "shoulder": 27.25,
+    "elbow": -79.09,
+    "wrist_pitch": 63.06,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 333,
-    "shoulder": 368,
-    "elbow": 844,
-    "wrist_pitch": 788,
+    "base": 289,
+    "shoulder": 614,
+    "elbow": 170,
+    "wrist_pitch": 763,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -82,17 +82,17 @@
   {
    "t": 0.4,
    "deg": {
-    "base": -40.0,
-    "shoulder": -32.12,
-    "elbow": 67.93,
-    "wrist_pitch": 76.19,
+    "base": -50.7,
+    "shoulder": 26.67,
+    "elbow": -61.58,
+    "wrist_pitch": 71.99,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 333,
-    "shoulder": 366,
-    "elbow": 783,
-    "wrist_pitch": 817,
+    "base": 289,
+    "shoulder": 611,
+    "elbow": 243,
+    "wrist_pitch": 800,
     "wrist_roll": 500
    },
    "speed": "normal"

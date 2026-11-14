@@ -140,6 +140,8 @@ class OffsetsCfg(_M):
 class GateCfg(_M):
     backoff_mm: float = 50
     retreat_after_s: float = 5
+    require_go: bool = False          # approach also needs a fresh GO press (ESP32 button in "go" role, or Enter)
+    go_window_s: float = 5            # a GO press counts for this long; each approach uses one press
 
 
 class FsmCfg(_M):
@@ -186,6 +188,8 @@ class VoiceCfg(_M):
 
 class Esp32Cfg(_M):
     enabled: bool = True
+    button_role: Literal["stop", "go"] = "stop"   # stop: press = STOP. go: press = request a bite / bring it in
+    stop_switch: Literal["none", "rocker", "button"] = "none"   # STOP input on STOP_PIN (GPIO 5)
     port: str = "auto"
     baud: int = 115200
     heartbeat_timeout_s: float = 3

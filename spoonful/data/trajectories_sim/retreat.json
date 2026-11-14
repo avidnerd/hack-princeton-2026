@@ -2,7 +2,7 @@
  "name": "retreat",
  "kind": "path",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,17 +10,17 @@
   {
    "t": 0.0,
    "deg": {
-    "base": 0.0,
-    "shoulder": -39.1,
-    "elbow": 83.19,
-    "wrist_pitch": 45.9,
+    "base": -90.7,
+    "shoulder": 30.44,
+    "elbow": -71.99,
+    "wrist_pitch": 43.35,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 337,
-    "elbow": 847,
-    "wrist_pitch": 691,
+    "base": 122,
+    "shoulder": 627,
+    "elbow": 200,
+    "wrist_pitch": 681,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -28,17 +28,17 @@
   {
    "t": 0.1,
    "deg": {
-    "base": 0.0,
-    "shoulder": -37.47,
-    "elbow": 71.49,
-    "wrist_pitch": 57.98,
+    "base": -90.7,
+    "shoulder": 28.62,
+    "elbow": -59.2,
+    "wrist_pitch": 56.32,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 344,
-    "elbow": 798,
-    "wrist_pitch": 742,
+    "base": 122,
+    "shoulder": 619,
+    "elbow": 253,
+    "wrist_pitch": 735,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -46,18 +46,18 @@
   {
    "t": 0.2,
    "deg": {
-    "base": 0.0,
-    "shoulder": -30.0,
-    "elbow": 70.0,
-    "wrist_pitch": 40.0,
-    "wrist_roll": 0.0
+    "base": -90.7,
+    "shoulder": 63.4,
+    "elbow": -64.3,
+    "wrist_pitch": 87.6,
+    "wrist_roll": -6.5
    },
    "units": {
-    "base": 500,
-    "shoulder": 375,
-    "elbow": 792,
-    "wrist_pitch": 667,
-    "wrist_roll": 500
+    "base": 122,
+    "shoulder": 764,
+    "elbow": 232,
+    "wrist_pitch": 865,
+    "wrist_roll": 473
    },
    "speed": "normal"
   }

@@ -54,6 +54,12 @@ def resume(req: Request):
     return {"ok": True}
 
 
+@router.post("/go")
+def go(req: Request, b: Src = Src()):
+    _sys(req).fsm.post("go", source=b.source)
+    return {"ok": True}
+
+
 @router.post("/bite")
 def bite(req: Request):
     _sys(req).fsm.post("bite", source="ui")

@@ -62,7 +62,7 @@ TRANSITIONS: list[tuple[str, S, str]] = [
     (S.LISTENING, S.SCOOPING, "bite request: voice \"bite\", button, UI, or pace offer (auto-pace opted in)"),
     (S.SCOOPING, S.LIFTING, "scoop path done (outside face zone, no permit needed)"),
     (S.LIFTING, S.PRE_DELIVERY_HOLD, "lift path done, spoon at pre_delivery (outside face zone)"),
-    (S.PRE_DELIVERY_HOLD, S.DELIVERING, "gate PERMIT"),
+    (S.PRE_DELIVERY_HOLD, S.DELIVERING, "gate PERMIT, plus a GO press within go_window_s if gate.require_go (one press per approach)"),
     (S.PRE_DELIVERY_HOLD, S.RETREAT, "no permit for pre_delivery_timeout_s, or retreat_after_s after a back-off"),
     (S.DELIVERING, S.PRE_DELIVERY_HOLD, "permit lost: back off backoff_mm, wait again"),
     (S.DELIVERING, S.RETREAT, "permit lost twice in one bite, or contact near the face"),
@@ -73,8 +73,8 @@ TRANSITIONS: list[tuple[str, S, str]] = [
     (ANY, S.PAUSED, "voice \"pause\" / UI PAUSE (from an active state): hold position"),
     (S.PAUSED, S.LISTENING, "resume with the spoon at rest"),
     (S.PAUSED, S.RETREAT, "resume mid-bite: retreat first"),
-    (ANY, S.STOPPED, "STOP button / spacebar / voice \"stop\" / UI STOP: hold, torque off after 1 s (latched)"),
-    (S.STOPPED, S.HOMING, "physical button press THEN UI confirm within stop_release_window_s"),
+    (ANY, S.STOPPED, "STOP switch off or unreadable / STOP button / spacebar / voice \"stop\" / UI STOP: hold, torque off after 1 s (latched)"),
+    (S.STOPPED, S.HOMING, "STOP press (button or spacebar) or STOP switch back on, THEN UI confirm within stop_release_window_s; never while the switch is off; GO never releases"),
     (ANY, S.FAULT, "contact outside face zone, HID errors, camera lost > camera_fault_s, watchdog trip: park"),
     (S.FAULT, S.HOMING, "operator reset in the UI"),
 ]
@@ -122,6 +122,8 @@ class FSM:
         self.events: "collections.deque[tuple[str, dict]]" = collections.deque()
         self.fault_reason = ""
         self.stop_release_armed_at: Optional[float] = None
+        self.go_at: Optional[float] = None     # last GO press while holding at pre_delivery (gate.require_go)
+        self.stop_switch_off = False           # rocker STOP switch at O (or unreadable): no release while set
         self.end_after_bite = False
         self.calibration_mode = False
         self.last_tick = time.monotonic()
@@ -249,7 +251,7 @@ class FSM:
     def _event(self, kind: str, kw: dict, now: float) -> None:
         st = self.state
         src = kw.get("source", "")
-        if kind != "piezo":
+        if kind not in ("piezo", "stop_switch"):     # stop_switch repeats every heartbeat: logged on change below
             self.log.event("input", detail_kind=kind, **{k: v for k, v in kw.items() if k != "kind"})
         if kind == "boot":
             if st == S.BOOT:
@@ -263,16 +265,34 @@ class FSM:
                 self._go(S.STOPPED, f"stop ({src})")
         elif kind == "button":                 # ESP32 press: STOP everywhere; arms release when stopped
             self._event("stop", {"source": "button"}, now)
+        elif kind == "stop_switch":            # rocker level, every change and every heartbeat
+            off, was_off = bool(kw.get("off")), self.stop_switch_off
+            self.stop_switch_off = off
+            if off != was_off:
+                self.log.event("input", detail_kind="stop_switch", off=off, lost=bool(kw.get("lost")))
+            if off and st != S.STOPPED:
+                self._go(S.STOPPED, "stop (STOP switch " + ("unreadable" if kw.get("lost") else "off") + ")")
+            elif was_off and not off and st == S.STOPPED:
+                self.stop_release_armed_at = now   # flipped back to I: the physical half of a release
+                self.log.event("stop_release_armed", detail_source="switch")
+        elif kind == "go":                     # GO press: ask for a bite, or confirm the approach while holding
+            if st == S.LISTENING:
+                self._event("bite", {"source": src or "go"}, now)
+            elif st == S.PRE_DELIVERY_HOLD:
+                self.go_at = now
+                self.log.event("go_pressed", detail_source=src)
         elif kind == "reset":
             if st == S.FAULT:
                 self._go(S.HOMING, "operator reset")
             elif st == S.STOPPED:
                 armed = self.stop_release_armed_at
-                if armed and now - armed <= self.cfg.fsm.stop_release_window_s:
+                if self.stop_switch_off:
+                    self.log.event("stop_release_refused", detail_why="STOP switch is off")
+                elif armed and now - armed <= self.cfg.fsm.stop_release_window_s:
                     self.stop_release_armed_at = None
                     self._go(S.HOMING, "stop released: button + UI confirm")
                 else:
-                    self.log.event("stop_release_refused", detail_why="press the physical STOP button first")
+                    self.log.event("stop_release_refused", detail_why="press the STOP button or spacebar first")
         elif kind == "fault":
             self._fault(kw.get("kind", "fault"), now, kw)
         elif kind == "pause":
@@ -329,6 +349,7 @@ class FSM:
     # ================================================================== bite bookkeeping
     def _start_bite(self, source: str, now: float) -> None:
         self.bite = Bite(source)
+        self.go_at = None
         self.offsets.reset()
         self.mouth_target = None
         self._go(S.SCOOPING, f"bite ({source})")
@@ -502,13 +523,19 @@ class FSM:
         limit = self.cfg.fsm.pre_delivery_timeout_s
         if b and b.aborts:
             limit = min(limit, self.cfg.gate.retreat_after_s)
-        if self.verdict.ok:
-            self._go(S.DELIVERING, "permit")
+        if self.verdict.ok and self._go_fresh(now):
+            self.go_at = None                  # one press per approach: a back-off needs a new press
+            self._go(S.DELIVERING, "permit" + (" + GO" if self.cfg.gate.require_go else ""))
         elif waited >= limit:
             if b:
                 b.outcome = "timeout"
             self.speaker.say("wait")
             self._go(S.RETREAT, f"no permit for {waited:.0f} s")
+
+    def _go_fresh(self, now: float) -> bool:
+        if not self.cfg.gate.require_go:
+            return True
+        return self.go_at is not None and now - self.go_at <= self.cfg.gate.go_window_s
 
     def _delivery_target(self, now: float) -> Pose:
         base = self.lib.pose("mouth_nominal") if self.lib.has("mouth_nominal") else self.lib.path("present")[-1]
@@ -678,11 +705,16 @@ class FSM:
             S.BOOT: "Starting up", S.HOMING: "Moving to home",
             S.IDLE: "Idle. Start a session to begin" + (" (CALIBRATION MODE: no diner)" if self.calibration_mode else ""),
             S.LISTENING: "Waiting for a bite request", S.SCOOPING: "Scooping", S.LIFTING: "Lifting the spoon",
-            S.PRE_DELIVERY_HOLD: f"Holding: {reasons.get(v.reason, 'ready')}" if not v.ok else "Permit: approaching",
+            S.PRE_DELIVERY_HOLD: (f"Holding: {reasons.get(v.reason, 'ready')}" if not v.ok
+                                  else "Ready: press the button to bring the spoon" if not self._go_fresh(time.monotonic())
+                                  else "Permit: approaching"),
             S.DELIVERING: "Bringing the spoon to you", S.MOUTH_HOLD: "Holding still at your mouth",
             S.RETREAT: "Moving the spoon away", S.PAUSED: "Paused. Say resume or press RESUME",
             S.FAULT: f"Taking a break: {self.fault_reason}. Operator reset needed",
-            S.STOPPED: "STOPPED. Press the STOP button, then confirm in the app",
+            S.STOPPED: ("STOPPED. Flip the STOP switch back on, then confirm in the app" if self.stop_switch_off
+                        else "STOPPED. Press the STOP button, then confirm in the app"
+                        if self.cfg.esp32.button_role == "stop" or self.cfg.esp32.stop_switch == "button"
+                        else "STOPPED. Press the spacebar, then confirm in the app"),
         }[st]
 
     def status(self) -> dict:
@@ -694,6 +726,8 @@ class FSM:
             "bite": None if not b else {"source": b.source, "aborts": b.aborts, "holds": b.holds},
             "fault": self.fault_reason if self.state == S.FAULT else "",
             "stop_release_armed": bool(self.stop_release_armed_at),
+            "stop_switch_off": self.stop_switch_off,
+            "go_needed": self.state == S.PRE_DELIVERY_HOLD and not self._go_fresh(time.monotonic()),
             "calibration_mode": self.calibration_mode, "end_after_bite": self.end_after_bite,
             "offset_mm": round(self.offsets.offset_mm, 1), "depth_corr_mm": round(self.offsets.depth_mm, 1),
             "tick_ms": round(self.tick_ms, 2),

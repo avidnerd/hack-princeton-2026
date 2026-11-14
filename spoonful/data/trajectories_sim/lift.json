@@ -2,7 +2,7 @@
  "name": "lift",
  "kind": "path",
  "meta": {
-  "recorded_at": "2026-11-12T01:46:23",
+  "recorded_at": "2026-11-13T22:05:41",
   "backend": "sim",
   "note": "IK placeholder, not taught"
  },
@@ -10,17 +10,17 @@
   {
    "t": 0.0,
    "deg": {
-    "base": -40.0,
-    "shoulder": -32.12,
-    "elbow": 67.93,
-    "wrist_pitch": 76.19,
+    "base": -50.7,
+    "shoulder": 26.67,
+    "elbow": -61.58,
+    "wrist_pitch": 71.99,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 333,
-    "shoulder": 366,
-    "elbow": 783,
-    "wrist_pitch": 817,
+    "base": 289,
+    "shoulder": 611,
+    "elbow": 243,
+    "wrist_pitch": 800,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -28,17 +28,17 @@
   {
    "t": 0.1,
    "deg": {
-    "base": -30.0,
-    "shoulder": -38.07,
-    "elbow": 71.87,
-    "wrist_pitch": 66.2,
+    "base": -60.7,
+    "shoulder": 30.96,
+    "elbow": -63.19,
+    "wrist_pitch": 62.67,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 375,
-    "shoulder": 341,
-    "elbow": 799,
-    "wrist_pitch": 776,
+    "base": 247,
+    "shoulder": 629,
+    "elbow": 237,
+    "wrist_pitch": 761,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -46,17 +46,17 @@
   {
    "t": 0.2,
    "deg": {
-    "base": -10.0,
-    "shoulder": -40.43,
-    "elbow": 81.16,
-    "wrist_pitch": 51.27,
+    "base": -80.7,
+    "shoulder": 32.19,
+    "elbow": -70.94,
+    "wrist_pitch": 48.15,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 458,
-    "shoulder": 332,
-    "elbow": 838,
-    "wrist_pitch": 714,
+    "base": 164,
+    "shoulder": 634,
+    "elbow": 204,
+    "wrist_pitch": 701,
     "wrist_roll": 500
    },
    "speed": "normal"
@@ -64,17 +64,17 @@
   {
    "t": 0.30000000000000004,
    "deg": {
-    "base": 0.0,
-    "shoulder": -39.1,
-    "elbow": 83.19,
-    "wrist_pitch": 45.9,
+    "base": -90.7,
+    "shoulder": 30.44,
+    "elbow": -71.99,
+    "wrist_pitch": 43.35,
     "wrist_roll": 0.0
    },
    "units": {
-    "base": 500,
-    "shoulder": 337,
-    "elbow": 847,
-    "wrist_pitch": 691,
+    "base": 122,
+    "shoulder": 627,
+    "elbow": 200,
+    "wrist_pitch": 681,
     "wrist_roll": 500
    },
    "speed": "normal"
