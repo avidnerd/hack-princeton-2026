@@ -57,6 +57,11 @@ def parse_command(text: str, cfg: VoiceCfg, require_wake: bool = True) -> Option
     return best[1] if best else None
 
 
+def heard_wake(text: str, cfg: VoiceCfg) -> bool:
+    t = normalise(text)
+    return any(alias in t for alias in cfg.wake_aliases)
+
+
 def _import_whisper():
     """faster_whisper imports PyAV (ffmpeg DLLs) at import time, only for decoding audio files. We pass numpy arrays,
     so PyAV is never used. Windows Smart App Control blocks PyAV's DLLs ("An Application Control policy has blocked
@@ -204,6 +209,8 @@ class VoiceListener:
                 self.log.voice(text, cmd, round(conf, 3))
             if cmd:
                 self.on_command(cmd, text, conf)
+            elif conf >= self.cfg.voice.min_confidence and (ptt or heard_wake(text, self.cfg.voice)):
+                self.on_command(None, text, conf)   # e.g. "Spoonful, applesauce please": the system decides
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "error": self.error, "ptt": self.ptt, "last_text": self.last_text}

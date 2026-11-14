@@ -2,7 +2,7 @@
 
 - no FSM tick for 250 ms           -> arm.hold(), then a slow park (park is exempt from the heartbeat guard)
 - no camera frame for 500 ms while the arm is moving in a bite      -> FSM fault camera_dropout (hold + park)
-- no arm position read for 500 ms while torque is on                -> hold, FSM fault arm_read
+- no arm position read for 1 s while torque is on                    -> hold, FSM fault arm_read
 Every trip is logged with its cause. The arm thread separately refuses setpoints without a fresh heartbeat.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ..log import Log
 class Watchdog:
     FSM_TIMEOUT_S = 0.25
     CAMERA_TIMEOUT_S = 0.5
-    ARM_READ_TIMEOUT_S = 0.5
+    ARM_READ_TIMEOUT_S = 1.0     # one joint per tick: a joint's reading is up to ~0.25 s old by design
 
     def __init__(self, fsm, arm: Arm, camera, log: Log):
         self.fsm, self.arm, self.camera, self.log = fsm, arm, camera, log

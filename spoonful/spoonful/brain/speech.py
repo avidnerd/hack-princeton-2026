@@ -156,6 +156,32 @@ class Speaker:
             self.log.event("speech", detail_line=LINES[key])
         return True
 
+    def say_text(self, text: str) -> bool:
+        """Speak a line that isn't in LINES (e.g. a food name). OS voice only (not cached), no cooldown."""
+        if not text:
+            return False
+        if not self.cfg.speech.enabled or self.muted_fn() or self.backend not in ("say", "elevenlabs"):
+            if self.log:                                   # still recorded: the screen and tests show what it'd say
+                self.log.event("speech", detail_line=text, silent=True)
+            return False
+        with self._lock:
+            self.last_key, self.last_t = None, time.monotonic()
+            self.history.append((time.time(), text))
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+            cmd = tts_command(text, self.cfg.speech.voice, self.cfg.speech.rate)
+            if cmd:
+                argv, env = cmd
+                kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if WINDOWS else {}
+                try:
+                    self._proc = subprocess.Popen(argv, env={**os.environ, **env}, stdout=subprocess.DEVNULL,
+                                                  stderr=subprocess.DEVNULL, **kw)
+                except OSError:
+                    pass
+        if self.log:
+            self.log.event("speech", detail_line=text)
+        return True
+
     def _play(self, key: str) -> None:
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()

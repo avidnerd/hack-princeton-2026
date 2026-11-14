@@ -33,6 +33,7 @@ def snapshot(sys: System) -> dict:
         "esp32": sys.esp32.status(),
         "voice": sys.voice.status(),
         "food": sys.food.status(),
+        "plate": sys.plate.status(),
         "teach": sys.recorder.live() if sys.recorder.recording else {"recording": False},
         "sim": {"backend": sys.is_sim, "face": sys.face.sim_enabled, "face_state": sys.face.sim},
         "summary_outbox": sys.summary_outbox[-1:] if sys.summary_outbox else [],

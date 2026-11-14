@@ -26,16 +26,17 @@ class ContactMonitor:
     def reset(self) -> None:
         self._since.clear()
 
-    def allowance(self, speed_deg_s: float) -> float:
+    def allowance(self, speed_deg_s: float, extra_deg: float = 0.0, joint: str = "") -> float:
         a = self.cfg.arm
-        return a.contact_error_deg + a.contact_grace_deg * speed_deg_s / 10.0
+        base = a.contact_error_deg_joint.get(joint, a.contact_error_deg)
+        return base + a.contact_grace_deg * speed_deg_s / 10.0 + max(0.0, min(5.0, extra_deg))
 
     def check(self, now: float, commanded: Mapping[str, float], actual: Mapping[str, float],
-              speed_deg_s: float) -> Optional[Contact]:
-        allow = self.allowance(speed_deg_s)
+              speed_deg_s: float, extra_deg: float = 0.0) -> Optional[Contact]:
         for j in ARM_JOINTS:
             if j not in actual or j not in commanded:
                 continue
+            allow = self.allowance(speed_deg_s, extra_deg, j)
             err = abs(commanded[j] - actual[j])
             if err > allow:
                 since = self._since.setdefault(j, now)

@@ -25,7 +25,18 @@ def _system(args, **kw):
 
 def cmd_run(args, page: str = "/") -> None:
     import uvicorn
+    import socket
     from .app.server import create_app
+    c0 = C.load(args.config)
+    probe = socket.socket()
+    try:                                     # a second copy would fight the first one for the arm: refuse early
+        probe.bind((c0.app.host, c0.app.port))
+    except OSError:
+        print(f"Spoonful is already running (http://{c0.app.host}:{c0.app.port}/ is in use). Use that window, or "
+              f"close it (Ctrl+C) before starting another.")
+        return
+    finally:
+        probe.close()
     cfg, sys = _system(args)
     sys.start()
     app = create_app(sys)

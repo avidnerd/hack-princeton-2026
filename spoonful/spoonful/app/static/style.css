@@ -50,6 +50,9 @@ select, input { font: inherit; color: inherit; background: var(--panel); border:
 .verdict.wait { color: var(--wait); }
 .verdict.stop { color: var(--stop); }
 .explain { font-size: 26px; color: var(--muted); }
+.plate-line { font-size: 22px; margin-top: 6px; }
+.bowl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.bowl-row .empty { color: var(--muted); text-decoration: line-through; }
 
 .side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .stop { background: var(--stop); color: var(--stop-ink); border: none; font-size: 64px; font-weight: 900;

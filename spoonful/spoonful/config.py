@@ -39,9 +39,10 @@ class ArmCfg(_M):
     read_hz: float = 30
     read_median_window: int = 3
     contact_error_deg: float = 4.8
+    contact_error_deg_joint: dict[str, float] = {}   # per-joint override (gravity sag on the loaded joints)
     contact_hold_s: float = 0.3
     contact_grace_deg: float = 2.0
-    stop_torque_off_after_s: float = 1.0
+    stop_torque_off_after_s: float = 1.0          # < 0 = STOP holds with torque on (arms that fold when limp)
     gripper_close_deg: Optional[float] = None
     heartbeat_timeout_s: float = 0.25
     trajectories_dir: str = "data/trajectories"
@@ -71,6 +72,14 @@ class ArmCfg(_M):
         return self
 
 
+class FaceCyl(_M):
+    """Face zone as a vertical cylinder around the mouth (Quick setup); works wherever the diner sits."""
+    cx: float
+    cy: float
+    r: float
+    z: tuple[float, float]
+
+
 class Box(_M):
     x: tuple[float, float]
     y: tuple[float, float]
@@ -83,6 +92,8 @@ class KinCfg(_M):
     forearm_mm: float
     tool_mm: float
     tool_offset_mm: float = 0
+    spoon_measured: bool = False
+    face_cyl: Optional[FaceCyl] = None        # set by Quick setup; when set it replaces the face_zone box               # tool_mm/offset fitted from table touches (Calibrate > Spoon)
     sign: dict[str, float]
     zero_deg: dict[str, float]
     face_zone: Box
@@ -110,8 +121,11 @@ class Window(_M):
 class FaceCfg(_M):
     model_path: str
     mouth_open_ratio_threshold: float = 0.08
+    mouth_signal: Literal["jaw", "ratio"] = "jaw"   # jaw: the model's 3D jawOpen score (works with the head turned)
+    jaw_open_threshold: float = 0.25
     hysteresis_fraction: float = 0.7
     yaw_max_deg: float = 15
+    yaw_center_deg: float = 0                  # measured yaw when the diner looks at the arm (Calibrate > "looking")
     pitch_max_deg: float = 20
     pitch_offset_deg: float = 0
     presence_hold_s: float = 0.5
@@ -174,6 +188,8 @@ class SpeechCfg(_M):
 
 
 class VoiceCfg(_M):
+    requests: bool = True                      # False: voice can only STOP (bites come from the GO button / UI)
+    select: bool = True                        # with requests False: "Spoonful, the rice" picks the food (no motion); GO bites
     enabled: bool = False
     wake: str = "spoonful"
     wake_aliases: list[str] = ["spoonful"]
@@ -198,9 +214,73 @@ class Esp32Cfg(_M):
 class FoodCfg(_M):
     enabled: bool = False
     backend: Literal["gemini"] = "gemini"
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.8-flash"
     interval_s: float = 5
     bowl_roi: tuple[int, int, int, int] = (0, 0, 1280, 720)
+
+
+class BowlCfg(_M):
+    name: str                                  # "bowl1"; its taught scoop is scoop_<name> unless `scoop` is set
+    roi: tuple[int, int, int, int]             # x, y, w, h of the bowl in the plate camera image, 1280x720 coords
+    scoop: str = ""
+    label: str = ""                            # food name to assume when vision is off ("" = unknown)
+
+
+class ScoopStyle(_M):
+    depth_mm: float = 0                        # dig this much deeper than the taught scoop (capped at 15)
+    speed: float = 1.0                         # scoop speed factor (slower pushes steadily through firm food)
+    wiggle: int = 0                            # wrist saw strokes at the deepest point
+    contact_extra_deg: float = 0               # extra stall allowance while scooping (capped at 5)
+
+
+DEFAULT_SCOOP_STYLES = {
+    "liquid": {"speed": 0.7}, "soft": {},
+    "thick": {"depth_mm": 6, "speed": 0.8, "contact_extra_deg": 2},
+    "firm": {"depth_mm": 12, "speed": 0.6, "wiggle": 2, "contact_extra_deg": 4},
+}
+
+
+class ProbeCfg(_M):
+    """Feel for the bottom: descend slowly into the bowl until the joints lag (resistance), then scoop from there."""
+    enabled: bool = True
+    above_mm: float = 15                       # start the slow descent this far above the taught dip
+    below_mm: float = 10                       # never go further than this below the taught dip
+    speed_mm_s: float = 6
+    threshold_deg: float = 2.0                 # joint lag beyond its starting sag = resistance
+    backoff_mm: float = 4                      # scoop this far above the touch (soft food); firm food digs in
+
+
+class SpoonCheckCfg(_M):
+    """Look at the spoon at pre_delivery (the face camera sees it there): empty -> re-scoop."""
+    enabled: bool = True
+    max_rescoops: int = 2
+    wait_s: float = 4                          # longest the approach waits for the answer
+
+
+class TrackCfg(_M):
+    enabled: bool = True                       # follow a moved bowl (needs table calibration, see perception/table.py)
+    max_shift_mm: float = 150                  # further than this from the taught spot: ask for the bowl back
+                                               # (reach, joint limits and the face zone are checked as well)
+    max_age_s: float = 60                      # a located position older than this is not used
+    calib_file: str = "data/table_calib.json"
+    table_min_v_px: float = 380                # the spoon tip can't appear above this row (the table's far edge in the
+                                               # plate camera, 1280x720 coords): answers higher up are rejected
+
+
+class PlateCfg(_M):
+    enabled: bool = False
+    camera_index: int = -1                     # -1 = use the main (face) camera's frame
+    interval_s: float = 10                     # vision check period while IDLE / LISTENING
+    model: str = "gemini-3.5-flash-lite"
+    fallback_models: list[str] = ["gemini-3.1-flash-lite", "gemini-3.8-flash"]   # tried in order if `model` fails
+    timeout_s: float = 20                      # per vision call; a stuck call must not stall the watcher
+    track: TrackCfg = TrackCfg()
+    probe: ProbeCfg = ProbeCfg()
+    spoon_check: SpoonCheckCfg = SpoonCheckCfg()
+    scoop_styles: dict[str, ScoopStyle] = {k: ScoopStyle(**v) for k, v in DEFAULT_SCOOP_STYLES.items()}
+    default_texture: str = "soft"              # when neither vision nor the food name says
+    empty_confirm: int = 2                     # consecutive "empty" answers before a bowl counts as finished
+    bowls: list[BowlCfg] = []
 
 
 class AppCfg(_M):
@@ -244,6 +324,7 @@ class Config(_M):
     voice: VoiceCfg
     esp32: Esp32Cfg = Esp32Cfg()
     food: FoodCfg = FoodCfg()
+    plate: PlateCfg = PlateCfg()
     app: AppCfg = AppCfg()
     photon: PhotonCfg = PhotonCfg()
     profiles: ProfilesCfg = ProfilesCfg()
@@ -280,6 +361,7 @@ class Config(_M):
 # Fields the operator drawer may edit live (keep this list short and boring).
 LIVE_EDITABLE = [
     "face.mouth_open_ratio_threshold", "face.hysteresis_fraction", "face.yaw_max_deg", "face.pitch_max_deg",
+    "face.mouth_signal", "face.jaw_open_threshold", "face.yaw_center_deg",
     "face.pitch_offset_deg", "face.presence_hold_s", "face.mouth_open_hold_s", "face.frame_max_age_ms",
     "face.ema_alpha", "face.delivery_window_px", "gate.backoff_mm", "fsm.pre_delivery_timeout_s",
     "arm.max_speed_deg_s.default", "arm.max_speed_deg_s.near_face", "offsets.max_correction_mm",

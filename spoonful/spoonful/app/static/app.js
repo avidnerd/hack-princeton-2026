@@ -53,6 +53,7 @@ function render() {
     v.textContent = REASON_TEXT[f.gate.reason] ?? f.gate.reason; v.className = "verdict " + (f.gate.ok ? "ok" : "wait");
   } else { v.textContent = STATE_TEXT[st] || st; v.className = "verdict"; }
   $("explain").textContent = f.explain;
+  renderPlate();
   const cd = $("countdown");
   if (f.countdown != null) { cd.textContent = f.countdown.toFixed(1) + " s"; cd.classList.remove("hidden"); } else cd.classList.add("hidden");
 
@@ -154,9 +155,45 @@ $("jog").innerHTML = JOINTS.map((j) => `<span>${j}</span>` + [-5, -1, 1, 5].map(
   `<button data-j="${j}" data-d="${d}">${d > 0 ? "+" : ""}${d}°</button>`).join("")).join("");
 $("jog").onclick = (e) => { const b = e.target; if (b.dataset.j) post("jog", { joint: b.dataset.j, deg: +b.dataset.d }); };
 
+const setupLog = (t) => { $("setup-out").textContent = t; };
+for (const n of [1, 2]) {
+  $(`setup-b${n}`).onclick = () => post("setup/bowl", { bowl: `bowl${n}` }).then((r) => {
+    if (r.ok) setupLog(`Bowl ${n} saved` + (r.seen ? ` — camera sees ${r.food || "a bowl"}` : " — camera couldn't see the bowl (type its food in the Plate tab later)"));
+  });
+}
+$("setup-mouth").onclick = () => post("setup/mouth").then((r) => { if (r.ok) setupLog("Mouth saved. Torque on, then Build moves."); });
+$("setup-build").onclick = () => post("setup/build").then((r) => {
+  if (r.ok) { setupLog(`Built: ${r.moves.join(", ")}. Bowls: ${r.bowls.join(", ")}. Try a bite!`); loadTraj(); }
+});
+$("setup-clear").onclick = () => post("setup/clear").then(() => setupLog("Cleared."));
 $("teach-start").onclick = () => post("teach/start", { name: $("teach-name").value, kind: "path" });
 $("teach-stop").onclick = () => post("teach/stop").then((r) => { if (r.ok) { $("plan").textContent = `saved ${r.name}: ${r.waypoints} waypoints`; loadTraj(); } });
 $("pose-save").onclick = () => post("teach/pose", { name: $("pose-name").value }).then((r) => { if (r.ok) { $("plan").textContent = `saved ${r.name}: ${JSON.stringify(r.deg)}`; loadTraj(); } });
+$("spoon-touch").onclick = () => post("spoon/touch").then((r) => {
+  if (r.ok) $("spoon-out").textContent = `${r.n} touch${r.n > 1 ? "es" : ""} (this one tilted ${r.tilt_deg} deg)`;
+});
+$("spoon-clear").onclick = () => post("spoon/clear").then(() => { $("spoon-out").textContent = "cleared"; });
+$("spoon-fit").onclick = () => post("spoon/fit").then((r) => {
+  if (r.ok) $("spoon-out").textContent = `Spoon: ${r.tool_mm} mm long, tip ${r.tool_offset_mm} mm off the gripper line ` +
+    `(was ${r.was[0]} / ${r.was[1]}), fit error ${r.rms_mm} mm. Saved.`;
+});
+$("face-center").onclick = async () => {
+  const btn = $("face-center"); btn.disabled = true;
+  await post("speak", { text: "Look at the spoon" });
+  for (let n = 5; n > 0; n--) {                       // time to turn from the laptop to the spoon
+    btn.textContent = `Look at the spoon... ${n}`;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  btn.textContent = "Hold still...";
+  const r = await post("face/center");
+  btn.textContent = "I'm looking at the arm"; btn.disabled = false;
+  if (r.ok) toast(`Saved: looking at the arm = head turned ${r.yaw_center_deg} deg, tilted ${r.pitch_offset_deg} deg`);
+};
+setInterval(() => {
+  const f = S && S.face; if (!f || !$("face-live")) return;
+  $("face-live").textContent = f.present ? `now: turn ${(+f.yaw_deg).toFixed(0)} deg, tilt ${(+f.pitch_deg).toFixed(0)} deg, ` +
+    `mouth ${f.jaw_open >= 0 ? "jaw " + (+f.jaw_open).toFixed(2) : "ratio " + (+f.mouth_open_ratio).toFixed(2)}` : "no face";
+}, 300);
 $("torque-off").onclick = () => post("torque", { on: false });
 $("torque-on").onclick = () => post("torque", { on: true });
 $("replay-dry").onclick = () => post("teach/replay", { name: $("replay-name").value, speed: +$("replay-speed").value, dry_run: true })
@@ -221,3 +258,77 @@ $("sim-unblock").onclick = () => post("sim/jam", { joint: "elbow", on: false });
 
 if (location.hash.includes("operator")) { toggleDrawer(true); if (location.hash.includes("calibrate")) $("tabs").querySelector('[data-tab="calibrate"]').click(); }
 connect();
+
+
+// ---------------------------------------------------------------- plate
+let plateKey = "";
+function renderPlate() {
+  const p = S && S.plate;
+  const line = $("plate-line");
+  if (!p || !p.enabled) { line.classList.add("hidden"); return; }
+  const foods = p.bowls.map((b) => b.food ? (b.empty ? `${b.food} (finished)` : b.food) : null).filter(Boolean);
+  const now = S.fsm.bowl || S.fsm.last_bowl;
+  const cur = p.bowls.find((b) => b.name === now);
+  line.textContent = (foods.length ? "On the plate: " + foods.join(" · ") : "On the plate: (not seen yet)") +
+    (cur && cur.food ? `   → ${S.fsm.bowl ? "now" : "next"}: ${cur.food} (${cur.texture} scoop)` : "");
+  line.classList.remove("hidden");
+  $("plate-status").textContent = `vision: ${p.vision}` + (p.error ? ` — ${p.error}` : "") +
+    (p.last_check_age_s != null ? ` — checked ${p.last_check_age_s}s ago` : "");
+  const key = JSON.stringify(p.bowls) + S.fsm.state;
+  if (key === plateKey) return;            // don't rebuild while someone is typing
+  if (document.activeElement && (document.activeElement.classList.contains("bowl-food") ||
+      document.activeElement.classList.contains("bowl-tex"))) return;
+  plateKey = key;
+  $("plate-bowls").innerHTML = p.bowls.map((b) => `<div class="bowl-row">
+      <b>${esc(b.name)}</b>
+      <span class="${b.empty ? "empty" : ""}">${esc(b.food || "?")}${b.amount ? " (" + esc(b.amount) + ")" : ""}</span>
+      <small>[${esc(b.source || "unknown")}; scoop: ${esc(b.scoop)}]</small>
+      <select class="bowl-tex" data-bowl="${esc(b.name)}" title="how hard to scoop (${esc(b.texture_why)})">
+        <option value="">auto: ${esc(b.texture)}</option>
+        ${["liquid", "soft", "thick", "firm"].map((t) => `<option value="${t}" ${b.texture_why === "operator" && b.texture === t ? "selected" : ""}>${t}</option>`).join("")}
+      </select>
+      <input class="bowl-food" data-bowl="${esc(b.name)}" placeholder="type food to override" size="14">
+      <button data-set="${esc(b.name)}">Set</button>
+      <button data-bowlbite="${esc(b.name)}" ${S.fsm.state === "LISTENING" ? "" : "disabled"}>Bite from ${esc(b.name)}</button>
+    </div>`).join("");
+}
+$("ask-go").onclick = () => {
+  const t = $("ask-text").value.trim();
+  $("ask-text").blur();                       // give the keyboard back: the GO button types PageDown
+  if (t) post("ask", { text: t }).then(() => { $("ask-text").value = ""; });
+};
+$("ask-text").onkeydown = (e) => { if (e.key === "Enter") { e.stopPropagation(); $("ask-go").click(); } };
+$("plate-bowls").onclick = (e) => {
+  const t = e.target;
+  if (t.dataset.set) {
+    const inp = document.querySelector(`.bowl-food[data-bowl="${t.dataset.set}"]`);
+    post("plate/label", { bowl: t.dataset.set, food: inp.value.trim() }).then(() => { inp.value = ""; plateKey = ""; });
+  } else if (t.dataset.bowlbite) post("plate/bite", { bowl: t.dataset.bowlbite });
+};
+$("plate-bowls").onchange = (e) => {
+  const t = e.target;
+  if (t.classList.contains("bowl-tex")) post("plate/label", { bowl: t.dataset.bowl, food: "", texture: t.value }).then(() => { plateKey = ""; });
+};
+$("plate-check").onclick = () => post("plate/check").then(() => { plateKey = ""; $("plate-img").src = "/api/plate/image?t=" + Date.now(); });
+$("plate-img").onclick = (e) => {
+  if (!$("table-mode").checked) return;
+  const img = e.target, r = img.getBoundingClientRect();
+  const u = (e.clientX - r.left) / r.width * 1280, v = (e.clientY - r.top) / r.height * 720;
+  post("plate/table/point", { u, v }).then((j) => {
+    if (j.ok) { toast(`Table spot ${j.points} saved (${j.mm[0]}, ${j.mm[1]} mm)` + (j.ready ? ` — fit error ${j.rms_mm} mm` : ` — ${j.needed - j.points} more`)); }
+    $("plate-img").src = "/api/plate/image?t=" + Date.now();
+  });
+};
+$("table-auto").onclick = () => post("plate/table/auto");
+$("table-auto-stop").onclick = () => post("plate/table/auto/stop");
+$("table-clear").onclick = () => post("plate/table/clear").then(() => { $("plate-img").src = "/api/plate/image?t=" + Date.now(); });
+setInterval(() => {
+  const p = S && S.plate; if (!p || !p.table || !$("table-status")) return;
+  const t = p.table;
+  const sh = Object.entries(p.shifts || {}).map(([k, s]) => `${k}: ${s ? `moved ${(s[0] / 10).toFixed(1)}, ${(s[1] / 10).toFixed(1)} cm` : "at its spot / not found"}`).join(" · ");
+  const a = p.autocal || {};
+  $("table-status").textContent = (a.running ? `Calibrating: ${a.msg} (${a.points} seen). ` : (a.msg ? `Last calibration: ${a.msg}. ` : "")) +
+    (t.ready ? `Table calibrated from ${t.points} spots (fit error ${t.rms_mm} mm). ${sh}`
+             : `Table not calibrated: ${t.points} of ${t.needed} spots.`);
+}, 500);
+$("plate-img-refresh").onclick = () => { $("plate-img").src = "/api/plate/image?t=" + Date.now(); };

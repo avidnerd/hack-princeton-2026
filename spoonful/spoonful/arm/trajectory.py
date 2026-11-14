@@ -15,7 +15,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Optional, Iterable, Mapping, Optional
 
 from ..config import ARM_JOINTS, Config
 
@@ -62,6 +62,7 @@ class Segment:
     speed: str
     duration: float
     label: str = ""
+    linear: bool = False                # constant speed (probe descents); default is minimum-jerk
     _cum: list[float] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
@@ -76,7 +77,8 @@ class Segment:
     def at(self, t: float) -> Pose:
         if self.duration <= 0 or self.length <= 0:
             return dict(self.path[-1])
-        d = min_jerk(t / self.duration) * self.length
+        tau = min(1.0, max(0.0, t / self.duration))
+        d = (tau if self.linear else min_jerk(tau)) * self.length
         k = min(len(self.path) - 2, max(0, bisect.bisect_right(self._cum, d) - 1))
         span = self._cum[k + 1] - self._cum[k]
         s = 0.0 if span <= 0 else (d - self._cum[k]) / span
@@ -87,6 +89,8 @@ class Segment:
 class Plan:
     segments: list[Segment]
     name: str = ""
+    contact_extra_deg: float = 0.0     # extra stall allowance (firm-food scoops only; capped in contact.py)
+    probe_deg: Optional[float] = None  # probe: stop (successfully) when a joint lags this much beyond its starting sag
 
     @property
     def duration(self) -> float:

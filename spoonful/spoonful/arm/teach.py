@@ -88,6 +88,15 @@ class Recorder:
         if self._thread:
             self._thread.join(timeout=1)
         if hold:
+            # A joint left past its servo's range can't be held there: torque on would just stall it (and fault on
+            # every reset). Leave the arm limp and say which joint to move back.
+            units = self.arm.read().units or {}
+            bad = [f"{j} (reads {u})" for j, u in units.items() if j in ARM_JOINTS and not 0 <= u <= 1000]
+            if bad:
+                self.samples.clear()
+                raise RuntimeError("not saved: " + ", ".join(bad) + " is past the end of its servo. The arm is still "
+                                   "limp: move that joint back toward the middle, then click Torque on, and record "
+                                   "again with the bowl further from the base")
             self.arm.torque(True, ARM_JOINTS)  # hold wherever the hand left it
         if not self.samples:
             raise RuntimeError("no samples recorded (is the arm reading positions?)")

@@ -12,6 +12,7 @@ below, which just post intent for the thread.
 from __future__ import annotations
 
 import math
+import collections
 import statistics
 import threading
 import time
@@ -45,6 +46,7 @@ class Motion:
         self.done = threading.Event()
         self.error: Optional[BaseException] = None
         self.started = time.time()
+        self.touched: Optional[dict] = None    # probe motions: joint pose where resistance was felt
 
     def finish(self, error: Optional[BaseException] = None) -> None:
         if not self.done.is_set():
@@ -90,9 +92,13 @@ class Arm:
         self._last_heartbeat = time.monotonic()
         self._heartbeat_required = False
         self._last_read_ok = 0.0
+        self._joint_ok: dict[str, float] = {}      # round-robin reads: last good read per joint
+        self._rr = 0
         self._last_servo_log = 0.0
         self._last_read = 0.0
         self.contact = ContactMonitor(cfg)
+        self._probe_base: Optional[dict] = None
+        self._probe_since: Optional[float] = None
         self.last_contact: Optional[Contact] = None
         self._hid_errors = 0
         self._torque_off_at: Optional[float] = None
@@ -110,7 +116,10 @@ class Arm:
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
         self.backend.connect()
-        for _ in range(self.cfg.arm.read_median_window):
+        n = self.cfg.arm.read_median_window
+        if getattr(self.backend, "round_robin", False):
+            n = 2 * len(self.ids)                   # every joint, twice (one joint per read)
+        for _ in range(n):
             self._read()
         if not self.state.ok:
             raise BackendError("no position reads from the arm at startup")
@@ -170,6 +179,7 @@ class Arm:
             self._plan, self._plan_t0, self._motion = plan, time.monotonic(), m
             self.mode = "traj"
             self.contact.reset()
+            self._probe_base, self._probe_since = None, None
         return m
 
     def goto(self, pose: Pose, speed: str = "normal", speed_factor: float = 1.0, name: str = "goto") -> Motion:
@@ -204,7 +214,7 @@ class Arm:
             self._servo_target = None
 
     def stop(self) -> None:
-        """Hold the measured position immediately, torque off after stop_torque_off_after_s."""
+        """Hold the measured position immediately; torque off after stop_torque_off_after_s (< 0 = keep holding)."""
         with self._lock:
             self._cancel_motion(MotionDenied("stop"))
             self._servo_target = None
@@ -215,7 +225,10 @@ class Arm:
                 except BackendError:
                     pass
                 self.mode = "hold"
-            self._torque_off_at = time.monotonic() + self.cfg.arm.stop_torque_off_after_s
+            t = self.cfg.arm.stop_torque_off_after_s
+            # < 0: hold with torque on. On the xArm 1S a limp arm folds under gravity until the elbow passes the
+            # end of its servo's range, and then it can't drive itself back (2026-11-14).
+            self._torque_off_at = time.monotonic() + t if t >= 0 else None
         if self.log:
             self.log.event("arm_stop")
 
@@ -258,7 +271,31 @@ class Arm:
         if self.mode == "traj":
             self.mode = "hold" if self.torque_on else "idle"
 
+    def _read_one(self) -> None:
+        """Round-robin: one joint per tick (the xArm controller stalls ~200 ms on many multi-servo reads but
+        answers single reads in ~16 ms). read age = age of the stalest joint."""
+        joints = list(self.ids)
+        j = joints[self._rr % len(joints)]
+        self._rr += 1
+        try:
+            u = self.backend.read_one(self.ids[j])
+        except BackendError:
+            u = None
+        now = time.monotonic()
+        if u is not None:
+            self._hist[j].clear()                   # ~7 Hz per joint: no median, it would only add lag
+            self._hist[j].append(u)
+            self._joint_ok[j] = now
+        if all(self._hist[k] for k in JOINTS):
+            units = {k: int(self._hist[k][-1]) for k in JOINTS}
+            with self._lock:
+                self.state = JointState(time.time(), {k: self.to_deg(k, v) for k, v in units.items()}, units, True)
+            if len(self._joint_ok) == len(joints):
+                self._last_read_ok = min(self._joint_ok.values())
+
     def _read(self) -> None:
+        if getattr(self.backend, "round_robin", False):
+            return self._read_one()
         try:
             raw = self.backend.read_all(list(self.ids.values()))
         except BackendError:
@@ -310,6 +347,8 @@ class Arm:
         cfg = self.cfg
         dt = 1.0 / cfg.arm.stream_hz
         read_dt = 1.0 / cfg.arm.read_hz
+        if getattr(self.backend, "round_robin", False):
+            read_dt = 0.0                               # one joint every tick
         servo_log_dt = 1.0 / cfg.log.servo_log_hz
         next_t = time.monotonic()
         while not self._stop_evt.is_set():
@@ -383,7 +422,8 @@ class Arm:
             self.setpoint = nxt
             speed = joint_dist(cur, nxt) / dt
             self._send(nxt, dt * 1000 * 1.5)
-            c = self.contact.check(now, self.setpoint, self.state.deg, speed)
+            extra = self._plan.contact_extra_deg if self.mode == "traj" and self._plan is not None else 0.0
+            c = self.contact.check(now, self.setpoint, self.state.deg, speed, extra)
             if c:
                 if self.log:
                     self.log.fault("contact", joint=c.joint, err_deg=round(c.err_deg, 1), face_zone=c.in_face_zone)
@@ -395,13 +435,66 @@ class Arm:
                 self.contact.reset()
                 self.last_contact = c
                 return
-            settled = joint_dist(self.state.deg, nxt) <= self.cfg.arm.contact_error_deg
+            if self.mode == "traj" and self._plan is not None and self._plan.probe_deg and self._probe(now):
+                return
+            settled = all(abs(self.state.deg[j] - nxt[j]) <= self.cfg.arm.contact_error_deg_joint.get(
+                j, self.cfg.arm.contact_error_deg) for j in ARM_JOINTS)   # loaded joints sag a few degrees
             if finished and joint_dist(nxt, self._plan.end) < 0.05 and settled:
                 m = self._motion
                 self._plan, self._motion = None, None
                 self.mode = "hold"
                 if m:
                     m.finish()
+
+    PROBE_JOINTS = ("shoulder", "elbow", "wrist_pitch")
+    PROBE_WINDOW_S = 0.6        # round-robin reads refresh each joint every ~0.25 s on the real arm
+    PROBE_STALL_RATIO = 0.35
+    PROBE_SETTLE_S = 0.8
+
+    def _probe(self, now: float) -> bool:
+        """Probe plans: did the spoon meet resistance? Joints lag the command all the time (more when faster), so
+        lag alone is not a touch. A touch is a STALL: over the last PROBE_WINDOW_S the command moved a joint but the
+        joint itself moved < PROBE_STALL_RATIO of that, and its lag grew by >= probe_deg/2 since the descent
+        started. Held 0.1 s -> stop there; the motion succeeds with .touched set. Called with the lock held."""
+        if now - self._plan_t0 < self.PROBE_SETTLE_S:   # joints still catching up with the descent: lag is normal
+            return False
+        err = {j: abs(self.setpoint[j] - self.state.deg[j]) for j in self.PROBE_JOINTS}
+        if self._probe_base is None:
+            self._probe_base = err
+            self._probe_hist = collections.deque()
+        self._probe_hist.append((now, {j: self.setpoint[j] for j in self.PROBE_JOINTS},
+                                 {j: self.state.deg[j] for j in self.PROBE_JOINTS}))
+        while self._probe_hist and now - self._probe_hist[0][0] > self.PROBE_WINDOW_S:
+            self._probe_hist.popleft()
+        t_old, c_old, a_old = self._probe_hist[0]
+        if now - t_old < self.PROBE_WINDOW_S * 0.8:
+            return False
+        stalled = False
+        for j in self.PROBE_JOINTS:
+            cmd = abs(self.setpoint[j] - c_old[j])
+            act = abs(self.state.deg[j] - a_old[j])
+            grew = err[j] - self._probe_base[j]
+            if cmd >= 0.5 and act < self.PROBE_STALL_RATIO * cmd and grew >= self._plan.probe_deg / 2:
+                stalled = True
+        if not stalled:
+            self._probe_since = None
+            return False
+        self._probe_since = self._probe_since or now
+        if now - self._probe_since < 0.1:
+            return False
+        jump = max(err[j] - self._probe_base[j] for j in self.PROBE_JOINTS)
+        touched = {j: self.state.deg[j] for j in ARM_JOINTS}
+        self.setpoint = dict(touched)
+        self._send(self.setpoint, 100)
+        m = self._motion
+        self._plan, self._motion = None, None
+        self.mode = "hold"
+        if m:
+            m.touched = touched
+            m.finish()
+        if self.log:
+            self.log.event("probe_touch", detail_lag_growth_deg=round(jump, 1))
+        return True
 
     def _servo_step(self, cur: Pose, dt: float) -> Pose:
         a = self.cfg.arm

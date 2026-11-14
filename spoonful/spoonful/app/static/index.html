@@ -18,6 +18,9 @@
     </div>
     <div class="verdict" id="verdict">Starting</div>
     <div class="explain" id="explain"></div>
+    <div class="plate-line hidden" id="plate-line"></div>
+    <div class="row ask-row"><input id="ask-text" placeholder='Ask Spoonful... e.g. "a little of each"' size="34">
+      <button id="ask-go">Ask</button></div>
   </section>
 
   <aside class="side">
@@ -53,6 +56,7 @@
       <button data-tab="calibrate">Calibrate</button>
       <button data-tab="config">Thresholds</button>
       <button data-tab="health">Health</button>
+      <button data-tab="plate">Plate</button>
       <button data-tab="sim">Sim</button>
       <button data-tab="log">Log</button>
     </nav>
@@ -60,11 +64,24 @@
   </header>
 
   <section data-pane="teach">
+    <h3>Quick setup (new table, about 2 minutes)</h3>
+    <p class="note">Sit where you'll eat, bowls where they'll be. Click <b>Torque off</b> (below) and support the arm.
+      Dip the spoon into the first bowl and press <b>Spoon is in bowl 1</b>; same for bowl 2. Then touch the spoon to
+      your lips and press <b>Spoon is at my mouth</b>. Click <b>Torque on</b>, then <b>Build moves</b>: the robot works
+      out every scoop, the lift, the waiting spot and the face zone from those touches. The camera names each food.</p>
+    <div class="row wrap">
+      <button id="setup-b1">Spoon is in bowl 1</button><button id="setup-b2">Spoon is in bowl 2</button>
+      <button id="setup-mouth">Spoon is at my mouth</button>
+      <button id="setup-build" class="primary">Build moves</button><button id="setup-clear">Start over</button>
+    </div>
+    <div id="setup-out" class="note"></div>
+    <h3>Record by hand</h3>
     <p class="note">Only in IDLE. Torque turns off on the arm joints while recording: support the arm.</p>
     <div class="row wrap">
       <select id="teach-name">
         <option>scoop</option><option>scoop_small</option><option>scoop_full</option><option>lift</option>
         <option>present</option><option>retreat</option>
+        <option>scoop_bowl1</option><option>scoop_bowl2</option><option>scoop_bowl3</option>
       </select>
       <button id="teach-start">Record path</button>
       <button id="teach-stop" class="primary big">DONE</button>
@@ -86,6 +103,19 @@
   </section>
 
   <section data-pane="calibrate" class="hidden">
+    <h3>Where "looking" is</h3>
+    <p class="note">Sit in the chair and press this. You get 5 seconds (it says "Look at the spoon") to turn your
+      head to the spoon the way you will when eating; hold still until it says "Got it". The face check then treats
+      that direction as "looking at the arm".</p>
+    <div class="row wrap"><button id="face-center" class="primary">I'm looking at the arm</button>
+      <span id="face-live" class="note"></span></div>
+    <h3>Spoon length</h3>
+    <p class="note">Teaches the robot where the spoon TIP really is (needed after re-taping the spoon). Teach &gt;
+      Torque off, then rest the spoon tip lightly on the table and press <b>Tip is on the table</b>. Do it 3 times
+      with different tilts: spoon steep, medium, nearly flat. Then <b>Fit spoon</b>.</p>
+    <div class="row wrap"><button id="spoon-touch">Tip is on the table</button>
+      <button id="spoon-fit" class="primary">Fit spoon</button><button id="spoon-clear">Clear</button>
+      <span id="spoon-out" class="note"></span></div>
     <p class="note">Calibration mode allows approach without a diner. Nobody in the chair.</p>
     <div class="row wrap">
       <button id="calib-on">Calibration mode ON</button><button id="calib-off">OFF</button>
@@ -111,6 +141,34 @@
 
   <section data-pane="health" class="hidden">
     <pre id="health" class="plan"></pre>
+  </section>
+
+  <section data-pane="plate" class="hidden">
+    <p class="note">Which food is in which bowl. Vision re-checks every few seconds while idle; type a name to
+      override it. Each bowl needs its own taught scoop (Teach: scoop_bowl1, ...). Say "Spoonful, a bite of the
+      applesauce" or "Spoonful, what's on my plate?".</p>
+    <div id="plate-status" class="note"></div>
+    <div id="plate-bowls"></div>
+    <div class="row wrap">
+      <button id="plate-check">Check now</button>
+      <button id="plate-img-refresh">Refresh picture</button>
+    </div>
+    <img id="plate-img" alt="plate camera with bowl boxes" style="max-width:100%;margin-top:8px;cursor:crosshair">
+    <h3>Follow the bowl</h3>
+    <p class="note"><b>Automatic (recommended):</b> first measure the spoon (Calibrate &gt; Spoon length). Then clear
+      the table within the arm's reach (cup, laptop edge, cables), end the session (IDLE), keep hands clear, and press
+      this. The arm holds the spoon tip 5 cm above about 15 spots, left to right, and the camera finds the tip at each
+      one (2-3 minutes). Then put the cup anywhere the camera sees and the arm can reach.</p>
+    <div class="row wrap"><button id="table-auto" class="primary">Calibrate automatically</button>
+      <button id="table-auto-stop">Stop calibration</button></div>
+    <p class="note">Manual instead:</p>
+    <p class="note">Teaches the camera where the table is, so a bowl that was moved a little (up to 6 cm) is still
+      scooped. Once, with the plate camera fixed in place: Teach &gt; Torque off, touch the spoon tip to the table at a
+      spot the camera can see, press <b>Refresh picture</b>, then click that exact spot in the picture. Do 4 to 6 spots,
+      spread around where the bowls go.</p>
+    <div class="row wrap"><label><input type="checkbox" id="table-mode"> clicking the picture adds a table spot</label>
+      <button id="table-clear">Clear table spots</button></div>
+    <div id="table-status" class="note"></div>
   </section>
 
   <section data-pane="sim" class="hidden">

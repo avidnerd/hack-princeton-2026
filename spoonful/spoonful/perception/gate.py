@@ -2,8 +2,9 @@
 
 Deny reasons (exact strings, shown on screen and logged):
   stop_latched, paused, frame_stale, no_face, face_too_brief, looking_away, mouth_outside_window, mouth_closed
-Permit requires: face present for >= presence_hold_s, |yaw| <= yaw_max, |pitch - offset| <= pitch_max,
-mouth inside the delivery window, mouth_open_ratio >= threshold for >= mouth_open_hold_s, frame age <=
+Permit requires: face present for >= presence_hold_s, |yaw - yaw_center| <= yaw_max (yaw_center = where the diner
+looks to face the arm), |pitch - offset| <= pitch_max, mouth inside the delivery window, mouth open (jawOpen, or the
+lip-gap ratio as fallback) >= threshold for >= mouth_open_hold_s, frame age <=
 frame_max_age_ms. Hysteresis: once permitted, the mouth may close to hysteresis_fraction x threshold (and the
 hold timer is not re-required) before denial, so the gate does not flutter mid-delivery.
 """
@@ -49,11 +50,18 @@ class Gate:
         w = self.cfg.delivery_window_px
         return w.x[0] * sx <= x <= w.x[1] * sx and w.y[0] * sy <= y <= w.y[1] * sy
 
+    def openness(self, face: FaceState) -> tuple[float, float]:
+        """(value, threshold). jawOpen comes from the model's 3D fit, so it still reads with the head turned; the
+        2D lip-gap ratio is the fallback when the model gives no blendshapes."""
+        if self.cfg.mouth_signal == "jaw" and face.jaw_open >= 0:
+            return face.jaw_open, self.cfg.jaw_open_threshold
+        return face.mouth_open_ratio, self.cfg.mouth_open_ratio_threshold
+
     def mouth_open(self, face: FaceState) -> bool:
-        th = self.cfg.mouth_open_ratio_threshold
+        v, th = self.openness(face)
         if self.permitted:
             th *= self.cfg.hysteresis_fraction
-        return face.mouth_open_ratio >= th
+        return v >= th
 
     def permit(self, face: FaceState, fsm_state: str, now: float) -> Verdict:
         v = self._evaluate(face, fsm_state, now)
@@ -68,7 +76,8 @@ class Gate:
             self.present_since = self.present_since if self.present_since is not None else face.ts
         else:
             self.present_since = None
-        raw_open = face.present and face.mouth_open_ratio >= c.mouth_open_ratio_threshold
+        v, th = self.openness(face)
+        raw_open = face.present and v >= th
         if raw_open:
             self.open_since = self.open_since if self.open_since is not None else face.ts
         elif not (self.permitted and self.mouth_open(face)):
@@ -84,7 +93,7 @@ class Gate:
             return Verdict(False, "no_face")
         if now - self.present_since < c.presence_hold_s:
             return Verdict(False, "face_too_brief")
-        if abs(face.yaw_deg) > c.yaw_max_deg or abs(face.pitch_deg - c.pitch_offset_deg) > c.pitch_max_deg:
+        if abs(face.yaw_deg - c.yaw_center_deg) > c.yaw_max_deg or abs(face.pitch_deg - c.pitch_offset_deg) > c.pitch_max_deg:
             return Verdict(False, "looking_away")
         if not self.in_window(face):
             return Verdict(False, "mouth_outside_window")

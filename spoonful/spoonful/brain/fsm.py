@@ -21,8 +21,9 @@ from typing import Callable, Optional
 from ..arm import kinematics as K
 from ..arm.arm import Arm, Motion, MotionDenied
 from ..arm.contact import Contact
+from ..arm.scoop_style import adapt_scoop, shift_scoop
 from ..arm.trajectory import Library, Pose, lerp_pose, plan
-from ..config import ARM_JOINTS, Config
+from ..config import ARM_JOINTS, Config, ScoopStyle
 from ..log import Log
 from ..perception.face import FaceState
 from ..perception.gate import Gate, Verdict
@@ -64,6 +65,7 @@ TRANSITIONS: list[tuple[str, S, str]] = [
     (S.LIFTING, S.PRE_DELIVERY_HOLD, "lift path done, spoon at pre_delivery (outside face zone)"),
     (S.PRE_DELIVERY_HOLD, S.DELIVERING, "gate PERMIT, plus a GO press within go_window_s if gate.require_go (one press per approach)"),
     (S.PRE_DELIVERY_HOLD, S.RETREAT, "no permit for pre_delivery_timeout_s, or retreat_after_s after a back-off"),
+    (S.PRE_DELIVERY_HOLD, S.SCOOPING, "face camera sees an empty spoon: re-scoop (at most plate.spoon_check.max_rescoops)"),
     (S.DELIVERING, S.PRE_DELIVERY_HOLD, "permit lost: back off backoff_mm, wait again"),
     (S.DELIVERING, S.RETREAT, "permit lost twice in one bite, or contact near the face"),
     (S.DELIVERING, S.MOUTH_HOLD, "spoon tip within mouth_arrive_mm of the (re-targeted) mouth"),
@@ -73,7 +75,7 @@ TRANSITIONS: list[tuple[str, S, str]] = [
     (ANY, S.PAUSED, "voice \"pause\" / UI PAUSE (from an active state): hold position"),
     (S.PAUSED, S.LISTENING, "resume with the spoon at rest"),
     (S.PAUSED, S.RETREAT, "resume mid-bite: retreat first"),
-    (ANY, S.STOPPED, "STOP switch off or unreadable / STOP button / spacebar / voice \"stop\" / UI STOP: hold, torque off after 1 s (latched)"),
+    (ANY, S.STOPPED, "STOP switch off or unreadable / STOP button / spacebar / voice \"stop\" / UI STOP: hold position (torque off after arm.stop_torque_off_after_s; < 0 = keeps holding) (latched)"),
     (S.STOPPED, S.HOMING, "STOP press (button or spacebar) or STOP switch back on, THEN UI confirm within stop_release_window_s; never while the switch is off; GO never releases"),
     (ANY, S.FAULT, "contact outside face zone, HID errors, camera lost > camera_fault_s, watchdog trip: park"),
     (S.FAULT, S.HOMING, "operator reset in the UI"),
@@ -90,6 +92,12 @@ def allowed(src: S, dst: S) -> bool:
 @dataclass
 class Bite:
     source: str
+    bowl: Optional[str] = None
+    texture: Optional[str] = None
+    rescoops: int = 0
+    spoon: Optional[dict] = None            # last spoon check answer
+    spoon_pending_since: Optional[float] = None
+    probe_touch_mm: Optional[float] = None  # where the spoon felt resistance, relative to the taught dip (+ = higher)
     ts_request: float = field(default_factory=time.time)
     ts_delivered: Optional[float] = None
     holds: int = 0
@@ -135,6 +143,15 @@ class FSM:
         self.last_verdict_logged: Optional[Verdict] = None
         self.last_said_last = False
         self.food = None
+        self._probe_job: Optional[dict] = None
+        self._perm_motion: Optional[str] = None   # permission(): the motion being checked and its closest approach
+        self._perm_min_d = 0.0
+        self._perm_from_inside = False    # probe scoop in progress (see _start_probe_scoop)
+        self._home_retried = False             # one automatic homing retry per reset (see _handle_motion_failure)
+        self._home_retry_at: Optional[float] = None
+        self.plate = None                      # PlateWatcher (perception/plate.py), set by System
+        self.last_bowl: Optional[str] = None
+        self.bite_queue: list[str] = []        # planner: "a little of each" -> one bowl per GO press   # GO / plain "bite" repeats the last food asked for
         self.on_summary: Optional[Callable[[int, str], None]] = None
         self.session_last_id: Optional[int] = None
         self._thread: Optional[threading.Thread] = None
@@ -145,7 +162,7 @@ class FSM:
         speaker.muted_fn = lambda: not self.profiles.current.speech
 
     # ================================================================== public API (thread-safe)
-    def post(self, kind: str, **kw) -> None:
+    def post(self, kind: str, /, **kw) -> None:   # positional-only: a fault may carry its own kind=
         self.events.append((kind, kw))
 
     def start(self) -> None:
@@ -179,6 +196,8 @@ class FSM:
             return ((b.x[0] + b.x[1]) / 2, (b.y[0] + b.y[1]) / 2, (b.z[0] + b.z[1]) / 2)
         return K.fk(self.cfg.kinematics, q)
 
+    APPROACH_SLACK_MM = 15
+
     def permission(self, cur: Pose, nxt: Pose, name: str) -> Optional[str]:
         st = self.state
         if st in (S.STOPPED, S.PAUSED, S.BOOT):
@@ -187,7 +206,23 @@ class FSM:
         if not K.in_face_zone(kin, nxt):
             return None
         m = self.mouth_point()
-        approaching = K.dist(K.fk(kin, nxt), m) < K.dist(K.fk(kin, cur), m) - 1e-3
+        d_cur, d_nxt = K.dist(K.fk(kin, cur), m), K.dist(K.fk(kin, nxt), m)
+        if st == S.DELIVERING:
+            approaching = d_nxt < d_cur - 1e-3                 # strict: every mm closer needs the gate
+        else:
+            # Outside DELIVERING nothing may head for the face. But a move AWAY from it (homing or retreating from
+            # the mouth) can start a millimetre closer, because the loaded arm sags below its setpoint. So: closer
+            # than this motion has ever been, by more than APPROACH_SLACK_MM.
+            # Only a motion that STARTED inside the face zone (leaving it) gets that slack; anything coming from
+            # outside may not enter the zone toward the mouth at all.
+            if name != self._perm_motion:
+                self._perm_motion, self._perm_min_d = name, d_cur
+                self._perm_from_inside = K.in_face_zone(kin, cur)
+            if self._perm_from_inside:
+                approaching = d_nxt < self._perm_min_d - self.APPROACH_SLACK_MM
+                self._perm_min_d = min(self._perm_min_d, d_nxt + self.APPROACH_SLACK_MM)
+            else:
+                approaching = d_nxt < d_cur - 1e-3
         if not approaching:
             return None
         if self.calibration_mode and st == S.IDLE:
@@ -255,6 +290,7 @@ class FSM:
             self.log.event("input", detail_kind=kind, **{k: v for k, v in kw.items() if k != "kind"})
         if kind == "boot":
             if st == S.BOOT:
+                self._home_retried = False
                 self._go(S.HOMING, "boot ok")
         elif kind == "stop":
             if st == S.STOPPED:
@@ -276,13 +312,18 @@ class FSM:
                 self.stop_release_armed_at = now   # flipped back to I: the physical half of a release
                 self.log.event("stop_release_armed", detail_source="switch")
         elif kind == "go":                     # GO press: ask for a bite, or confirm the approach while holding
-            if st == S.LISTENING:
+            if st == S.IDLE:                   # forgot "Start session": GO starts it and asks for the bite
+                self._event("session_start", {"source": src or "go"}, now)
+                if self.state == S.LISTENING:
+                    self._event("bite", {"source": src or "go"}, now)
+            elif st == S.LISTENING:
                 self._event("bite", {"source": src or "go"}, now)
             elif st == S.PRE_DELIVERY_HOLD:
                 self.go_at = now
                 self.log.event("go_pressed", detail_source=src)
         elif kind == "reset":
             if st == S.FAULT:
+                self._home_retried = False
                 self._go(S.HOMING, "operator reset")
             elif st == S.STOPPED:
                 armed = self.stop_release_armed_at
@@ -290,11 +331,12 @@ class FSM:
                     self.log.event("stop_release_refused", detail_why="STOP switch is off")
                 elif armed and now - armed <= self.cfg.fsm.stop_release_window_s:
                     self.stop_release_armed_at = None
+                    self._home_retried = False
                     self._go(S.HOMING, "stop released: button + UI confirm")
                 else:
                     self.log.event("stop_release_refused", detail_why="press the STOP button or spacebar first")
         elif kind == "fault":
-            self._fault(kw.get("kind", "fault"), now, kw)
+            self._fault(kw.get("kind", "fault"), now, {k: v for k, v in kw.items() if k != "kind"})
         elif kind == "pause":
             if st in ACTIVE:
                 self._go(S.PAUSED, f"pause ({src})")
@@ -317,9 +359,30 @@ class FSM:
                 self._go(S.IDLE, kind)
             elif st in BITE_STATES or st == S.PAUSED:
                 self.end_after_bite = True
+        elif kind == "select":                 # voice picked a food: remember it, say so, move nothing (GO bites)
+            if st in (S.IDLE, S.LISTENING, S.RETREAT, S.PRE_DELIVERY_HOLD, S.MOUTH_HOLD):
+                bowl = self._choose_bowl(kw.get("bowl"), announce=False)
+                if bowl:
+                    self.bite_queue = []
+                    food = self.plate.food_of(bowl) or "that"
+                    if not kw.get("quiet"):
+                        self.speaker.say_text(f"{food.capitalize()}. Ready when you are"
+                                              if st in (S.IDLE, S.LISTENING) else f"{food.capitalize()} next")
+                    self.log.event("food_selected", detail_bowl=bowl, food=food)
+        elif kind == "queue":                  # planner: several bites, one per GO press, in this order
+            bowls = [b for b in (kw.get("bowls") or []) if self.plate and b in self.plate.bowls][:5]
+            if bowls:
+                self.bite_queue = list(bowls)
+                self.last_bowl = bowls[-1]
+                self.log.event("bite_queue", detail_bowls=bowls)
         elif kind == "bite":
             if st == S.LISTENING:
-                self._start_bite(src or "ui", now)
+                asked = kw.get("bowl")
+                if asked is None and self.bite_queue:
+                    asked = self.bite_queue.pop(0)          # next one the planner lined up
+                bowl = self._choose_bowl(asked, announce=bool(kw.get("bowl")))
+                if bowl is not False:
+                    self._start_bite(src or "ui", now, bowl)
         elif kind in ("slower", "faster"):
             p = self.profiles.current
             k = 1.25 if kind == "slower" else 0.8
@@ -341,14 +404,63 @@ class FSM:
         if self.state in (S.FAULT, S.STOPPED):
             return
         self.fault_reason = kind
-        self.log.fault(kind, state=self.state.value, **(detail or {}))
+        self.log.fault(kind, state=self.state.value, **{k: v for k, v in (detail or {}).items() if k not in ("kind", "state")})
         if self.session.active:
             self.session.faults += 1
         self._go(S.FAULT, kind)
 
     # ================================================================== bite bookkeeping
-    def _start_bite(self, source: str, now: float) -> None:
-        self.bite = Bite(source)
+    def _choose_bowl(self, asked: Optional[str], announce: bool = True):
+        """Which bowl to scoop from. None = the profile's default scoop (no plate set up). False = refuse (said why)."""
+        p = self.plate
+        if p is None or not p.enabled:
+            return None
+        bowl = asked or self.last_bowl
+        if bowl is None and len(p.bowls) == 1:
+            bowl = next(iter(p.bowls))          # one bowl on the table: a plain "bite" means that one
+        if bowl is None:
+            return None
+        if bowl not in p.bowls:
+            self.log.event("bowl_refused", detail_bowl=bowl, why="unknown bowl")
+            return False
+        food = p.food_of(bowl) or "that"
+        if not self.lib.has(p.scoop_for(bowl)):
+            self.speaker.say_text(f"I haven't learned to scoop the {food} yet")
+            self.log.event("bowl_refused", detail_bowl=bowl, why=f"{p.scoop_for(bowl)} not taught")
+            return False
+        if p.is_empty(bowl):
+            self.speaker.say_text(f"The {food} is finished" if food != "that" else "That bowl is empty")
+            self.log.event("bowl_refused", detail_bowl=bowl, why="empty")
+            return False
+        shift = p.shift_for(bowl)
+        if shift is not None:
+            moved = math.hypot(*shift)
+            why = ""
+            if moved > self.cfg.plate.track.max_shift_mm:
+                why = f"moved {moved:.0f} mm from its taught spot"
+            else:
+                sh = shift_scoop(self.cfg.kinematics, self.lib.items[p.scoop_for(bowl)].poses, *shift)
+                if sh is None:
+                    why = f"moved {moved:.0f} mm: out of reach"
+                elif any(K.in_face_zone(self.cfg.kinematics, q) for q in sh):
+                    why = f"moved {moved:.0f} mm: too close to the diner's face"
+                else:
+                    try:
+                        plan(self.cfg, sh[0], [(sh, "normal", "check")])
+                    except Exception:
+                        why = f"moved {moved:.0f} mm: outside the arm's joint limits"
+            if why:
+                what = f"the {food}" if food != "that" else "the bowl"
+                self.speaker.say_text(f"I can't reach {what} there. Please move it closer to its spot")
+                self.log.event("bowl_refused", detail_bowl=bowl, why=why)
+                return False
+        if asked and announce:
+            self.speaker.say_text(f"{food.capitalize()}, coming up" if food != "that" else "Coming up")
+        self.last_bowl = bowl
+        return bowl
+
+    def _start_bite(self, source: str, now: float, bowl: Optional[str] = None) -> None:
+        self.bite = Bite(source, bowl=bowl)
         self.go_at = None
         self.offsets.reset()
         self.mouth_target = None
@@ -417,6 +529,15 @@ class FSM:
         return f"error:{m.error!r}"
 
     def _handle_motion_failure(self, res: str, now: float) -> None:
+        if res == "contact" and self.state == S.HOMING and not self._home_retried:
+            # The xArm controller sometimes ignores moves for a second or two (seen on the first move after start).
+            # Homing is away from the face: wait, retry once; a real obstruction faults on the second try.
+            self._home_retried = True
+            c = self.arm.last_contact
+            self.log.event("homing_retry", detail_joint=c.joint if c else "?")
+            self._home_retry_at = now + 1.0
+            self.motion = None
+            return
         if res == "contact":
             c = self.arm.last_contact
             if c and c.in_face_zone:
@@ -439,6 +560,19 @@ class FSM:
 
     # ================================================================== state handlers
     def _enter_homing(self) -> None:
+        # A joint pushed past its servo's 0..1000 range (by hand, or the elbow's travel) can't drive itself back:
+        # homing would just stall. Say which one so the operator can move it by hand with the power off.
+        if self.arm.read_age_s() > 2.0:
+            self._fault("no readings from the arm. Is its power switch on? Then restart the app",
+                        time.monotonic(), {"read_age_s": round(min(self.arm.read_age_s(), 1e6), 1)})
+            return
+        units = (self.arm.status() or {}).get("units") or {}
+        bad = [f"{j} (reads {u})" for j, u in units.items() if j in ARM_JOINTS and isinstance(u, (int, float))
+               and not 0 <= u <= 1000]   # past the end: the servo cannot drive back
+        if bad:
+            self._fault("joint out of servo range: " + ", ".join(bad) + ". Arm power OFF, bend it back by hand",
+                        time.monotonic(), {"units": units})
+            return
         try:
             if not self.arm.torque_on:
                 self.arm.torque(True)
@@ -454,8 +588,14 @@ class FSM:
                 self.log.fault("gripper", error=str(e))
 
     def _in_homing(self, now: float) -> None:
+        if self._home_retry_at is not None:
+            if now >= self._home_retry_at:
+                self._home_retry_at = None
+                self._enter_homing()
+            return
         r = self._motion_result()
         if r == "ok":
+            self._home_retried = False
             self._go(S.IDLE, "home")
         elif r:
             self._handle_motion_failure(r, now)
@@ -472,23 +612,154 @@ class FSM:
             self._start_bite("pace", now)
 
     def _enter_scooping(self) -> None:
+        self._probe_job = None
         prof = self.profiles.current
         scoop = prof.scoop_path if self.lib.has(prof.scoop_path) else "scoop"
+        if self.bite and self.bite.bowl and self.plate is not None:
+            scoop = self.plate.scoop_for(self.bite.bowl)   # checked taught in _choose_bowl
         missing = self._need(scoop, "lift", "pre_delivery")
         if missing:
             self._fault("missing_trajectory", time.monotonic(), {"name": missing})
             return
-        self._run_paths([(scoop, "normal")], name="scoop")
+        if not (self.bite and self.bite.bowl and self.plate is not None):
+            self._run_paths([(scoop, "normal")], name="scoop")
+            return
+        # How hard to dig depends on the food: same taught scoop, deeper / slower / with a saw for firm food.
+        texture, why = self.plate.texture_of(self.bite.bowl)
+        self.bite.texture = texture
+        style = self.cfg.plate.scoop_styles.get(texture)
+        base_poses = self.lib.items[scoop].poses
+        shift = self.plate.shift_for(self.bite.bowl)
+        if shift is not None and math.hypot(*shift) >= 5:
+            moved = shift_scoop(self.cfg.kinematics, base_poses, *shift)
+            if moved is not None:
+                base_poses = moved
+                self.log.event("scoop_shift", detail_bowl=self.bite.bowl, dx_mm=round(shift[0]), dy_mm=round(shift[1]))
+            else:
+                shift = None
+        else:
+            shift = None
+        probe = self.cfg.plate.probe.enabled
+        if not probe and shift is None and (style is None or (style.depth_mm <= 0 and style.wiggle <= 0
+                                                              and style.speed == 1.0 and style.contact_extra_deg <= 0)):
+            self._run_paths([(scoop, "normal")], name="scoop")          # soft food, bowl in place: the taught scoop
+            return
+        if style is None:
+            style = ScoopStyle()                                       # unknown texture: plain, just moved
+        depth = 0.0 if probe else style.depth_mm           # probing finds the depth itself
+        poses, info = adapt_scoop(self.cfg.kinematics, base_poses, depth, style.wiggle)
+        self.log.event("scoop_style", detail_texture=texture, why=why, food=self.plate.food_of(self.bite.bowl),
+                       speed=style.speed, contact_extra_deg=style.contact_extra_deg, probe=probe, **info)
+        if probe and self._start_probe_scoop(poses, style, texture):
+            return
+        try:
+            p = plan(self.cfg, self.arm.current(), [(poses, "normal", scoop)], style.speed, f"scoop({texture})")
+        except Exception as e:                       # a deeper pose outside the soft limits: use the taught one
+            self.log.event("scoop_style_fallback", detail_error=str(e)[:200])
+            self._run_paths([(scoop, "normal")], speed_factor=style.speed, name="scoop")
+            return
+        p.contact_extra_deg = style.contact_extra_deg
+        self.motion = self.arm.run(p)
+
+    # ------------------------------------------------------------------ probe scoop: feel for the bottom
+    def _start_probe_scoop(self, poses: list, style, texture: str) -> bool:
+        """Approach to just above the taught dip, descend slowly until the joints feel resistance, then run the
+        rest of the scoop from that depth. Three plans in a row (motion_step 0, 1, 2), driven by _in_scooping."""
+        from ..arm.scoop_style import lower_tip
+        from ..arm.trajectory import Plan, Segment
+        kin, pc = self.cfg.kinematics, self.cfg.plate.probe
+        if len(poses) < 3:
+            return False
+        k = min(range(1, len(poses) - 1), key=lambda i: K.fk(kin, poses[i])[2])
+        dip = poses[k]
+        hover = lower_tip(kin, dip, -pc.above_mm)
+        bottom = lower_tip(kin, dip, pc.below_mm)
+        if hover is None or bottom is None:
+            return False
+        try:
+            approach = plan(self.cfg, self.arm.current(), [(list(poses[:k]) + [hover], "normal", "scoop_approach")],
+                            style.speed, "scoop_approach")
+            plan(self.cfg, hover, [([bottom], "normal", "probe")])        # limits check only
+        except Exception as e:
+            self.log.event("probe_skipped", detail_error=str(e)[:160])
+            return False
+        T = (pc.above_mm + pc.below_mm) / max(1.0, pc.speed_mm_s)
+        hover = {j: hover[j] for j in ARM_JOINTS}
+        bottom = {j: bottom[j] for j in ARM_JOINTS}
+        self._probe_job = {"poses": poses, "k": k, "dip_z": K.fk(kin, dip)[2], "style": style, "texture": texture,
+                           "probe_plan": Plan([Segment([hover, bottom], "normal", T, "probe", linear=True)], "probe",
+                                              probe_deg=pc.threshold_deg)}
+        self.motion_step = 0
+        self.motion = self.arm.run(approach)
+        return True
+
+    def _probe_next(self, now: float) -> bool:
+        """Advance a probe scoop. True = handled (still scooping); False = finished (caller moves on)."""
+        job = getattr(self, "_probe_job", None)
+        if not job:
+            return False
+        if self.motion_step == 0:                              # above the bowl: feel downward
+            self.motion_step = 1
+            self.motion = self.arm.run(job["probe_plan"])
+            return True
+        if self.motion_step == 1:                              # touched (or reached the limit): scoop from there
+            from ..arm.scoop_style import lower_tip
+            kin, pc = self.cfg.kinematics, self.cfg.plate.probe
+            touched = self.motion.touched if self.motion else None
+            rest = [dict(p) for p in job["poses"][job["k"]:]]
+            if touched and K.fk(kin, touched)[2] > job["dip_z"] - pc.backoff_mm:
+                # Resistance above the taught dip: the bowl bottom can't be there (the taught scoop went lower), so
+                # it is thick food or a false stall. Scoop at the taught depth rather than shallower.
+                self.log.event("scoop_probe", detail_touch_mm=round(K.fk(kin, touched)[2] - job["dip_z"], 1),
+                               note="touch above the taught dip ignored: scooping at the taught depth")
+                touched = None
+                job["ignored_high_touch"] = True
+            if touched:
+                tz = K.fk(kin, touched)[2]
+                dig = job["style"].depth_mm if job["texture"] in ("firm", "thick") else 0.0
+                target = tz + pc.backoff_mm - dig
+                dz = job["dip_z"] - target                     # + = lower than taught
+                band = [i for i, p in enumerate(rest[:-1]) if K.fk(kin, p)[2] <= job["dip_z"] + 15]
+                for i in band:
+                    q = lower_tip(kin, rest[i], dz)
+                    if q is not None:
+                        rest[i] = q
+                if self.bite:
+                    self.bite.probe_touch_mm = round(tz - job["dip_z"], 1)
+                self.log.event("scoop_probe", detail_touch_mm=round(tz - job["dip_z"], 1), scoop_at_mm=round(-dz, 1),
+                               texture=job["texture"])
+            elif not job.get("ignored_high_touch"):
+                self.log.event("scoop_probe", detail_touch_mm=None, note="no resistance within the probe range")
+            try:
+                p = plan(self.cfg, self.arm.current(), [(rest, "normal", "scoop_rest")], job["style"].speed,
+                         f"scoop({job['texture']})")
+            except Exception as e:
+                self.log.event("probe_rest_fallback", detail_error=str(e)[:160])
+                p = plan(self.cfg, self.arm.current(), [(job["poses"][job["k"]:], "normal", "scoop_rest")],
+                         job["style"].speed, "scoop")
+            p.contact_extra_deg = job["style"].contact_extra_deg
+            self.motion_step = 2
+            self.motion = self.arm.run(p)
+            return True
+        self._probe_job = None
+        return False
 
     def _in_scooping(self, now: float) -> None:
         r = self._motion_result()
+        if r == "ok" and self._probe_next(now):
+            return
+        if r and r != "ok":
+            self._probe_job = None
         if r == "ok":
             self._go(S.LIFTING, "scooped")
         elif r:
             self._handle_motion_failure(r, now)
 
     def _enter_lifting(self) -> None:
-        self._run_paths([("lift", "normal"), ("pre_delivery", "normal")], name="lift")
+        lift = "lift"
+        if self.bite and self.bite.bowl and self.lib.has(f"lift_{self.bite.bowl}"):
+            lift = f"lift_{self.bite.bowl}"            # Quick setup builds one lift per bowl
+        self._run_paths([(lift, "normal"), ("pre_delivery", "normal")], name="lift")
 
     def _in_lifting(self, now: float) -> None:
         r = self._motion_result()
@@ -508,8 +779,18 @@ class FSM:
         b = self.bite
         if b:
             b.holds += 1
+            if b.spoon is None and b.spoon_pending_since is None and self.plate is not None \
+                    and self.plate.can_check_spoon:
+                b.spoon_pending_since = time.monotonic()
+                threading.Thread(target=self._check_spoon, args=(b,), name="spoon-check", daemon=True).start()
             if not b.ready_spoken:
                 b.ready_spoken = self.speaker.say("ready") or True
+
+    def _check_spoon(self, b) -> None:
+        r = self.plate.check_spoon()
+        b.spoon = r if r is not None else {"error": True}
+        b.spoon_pending_since = None
+        self.log.event("spoon_check", **{("detail_" + k if i == 0 else k): v for i, (k, v) in enumerate(b.spoon.items())})
 
     def _in_pre_delivery_hold(self, now: float) -> None:
         r = self._motion_result()
@@ -519,6 +800,16 @@ class FSM:
         if self.motion and r is None:
             return  # still backing off
         b = self.bite
+        sc = self.cfg.plate.spoon_check
+        if b and b.spoon_pending_since is not None and now - b.spoon_pending_since < sc.wait_s:
+            return                                   # looking at the spoon (a second or two)
+        if b and b.spoon and b.spoon.get("spoon_visible") and b.spoon.get("food_on_spoon") is False:
+            if b.rescoops < sc.max_rescoops:
+                b.rescoops += 1
+                b.spoon, b.ready_spoken = None, False
+                self.speaker.say_text("Missed. Trying again")
+                self._go(S.SCOOPING, f"spoon empty: re-scoop {b.rescoops}")
+                return
         waited = now - self.since
         limit = self.cfg.fsm.pre_delivery_timeout_s
         if b and b.aborts:
@@ -708,7 +999,8 @@ class FSM:
             S.PRE_DELIVERY_HOLD: (f"Holding: {reasons.get(v.reason, 'ready')}" if not v.ok
                                   else "Ready: press the button to bring the spoon" if not self._go_fresh(time.monotonic())
                                   else "Permit: approaching"),
-            S.DELIVERING: "Bringing the spoon to you", S.MOUTH_HOLD: "Holding still at your mouth",
+            S.DELIVERING: "Bringing the spoon to you" + (f" ({self.arm.servo_error_mm() / 10:.0f} cm to go)"
+                                                         if self.arm.servo_error_mm() > 5 else ""), S.MOUTH_HOLD: "Holding still at your mouth",
             S.RETREAT: "Moving the spoon away", S.PAUSED: "Paused. Say resume or press RESUME",
             S.FAULT: f"Taking a break: {self.fault_reason}. Operator reset needed",
             S.STOPPED: ("STOPPED. Flip the STOP switch back on, then confirm in the app" if self.stop_switch_off
@@ -727,6 +1019,13 @@ class FSM:
             "fault": self.fault_reason if self.state == S.FAULT else "",
             "stop_release_armed": bool(self.stop_release_armed_at),
             "stop_switch_off": self.stop_switch_off,
+            "bowl": self.bite.bowl if self.bite else None, "last_bowl": self.last_bowl,
+            "texture": self.bite.texture if self.bite else None,
+            "queue": list(self.bite_queue),
+            "spoon_to_mouth_mm": round(self.arm.servo_error_mm()) if self.state == S.DELIVERING else None,
+            "spoon": self.bite.spoon if self.bite else None,
+            "probe_touch_mm": self.bite.probe_touch_mm if self.bite else None,
+            "rescoops": self.bite.rescoops if self.bite else 0,
             "go_needed": self.state == S.PRE_DELIVERY_HOLD and not self._go_fresh(time.monotonic()),
             "calibration_mode": self.calibration_mode, "end_after_bite": self.end_after_bite,
             "offset_mm": round(self.offsets.offset_mm, 1), "depth_corr_mm": round(self.offsets.depth_mm, 1),

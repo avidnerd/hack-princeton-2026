@@ -150,3 +150,18 @@ def test_watchdog_fsm_stall(sim_system):
     time.sleep(0.4)
     assert s.watchdog.check(time.monotonic()) == "fsm_stalled"
     assert s.watchdog.trips and s.watchdog.trips[-1][1] == "fsm_stalled"
+
+
+def test_leaving_the_face_zone_tolerates_sag(sim_system):
+    """Homing from the mouth (spoon left at the lips) must not be refused because the sagging arm's first
+    setpoint is a millimetre closer to the mouth point."""
+    s = sim_system
+    wait_state(s, "IDLE")
+    mouth = dict(s.lib.pose("mouth_nominal"))
+    assert K.in_face_zone(s.cfg.kinematics, mouth)
+    cur = dict(mouth)
+    cur["shoulder"] += 0.4                      # sagged a little off the taught point
+    nxt = dict(cur)
+    nxt["shoulder"] -= 0.2                      # first step happens to be 0.x mm closer to the mouth
+    s.fsm._perm_motion = None
+    assert s.fsm.permission(cur, nxt, "homing") is None

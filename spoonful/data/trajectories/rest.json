@@ -1,0 +1,29 @@
+{
+ "name": "rest",
+ "kind": "pose",
+ "meta": {
+  "recorded_at": "2026-11-14T17:30:17",
+  "backend": "xarm"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": -94.56,
+    "shoulder": 54.48,
+    "elbow": -84.0,
+    "wrist_pitch": 93.6,
+    "wrist_roll": -6.48
+   },
+   "units": {
+    "base": 106,
+    "shoulder": 727,
+    "elbow": 150,
+    "wrist_pitch": 890,
+    "wrist_roll": 473
+   },
+   "speed": "normal"
+  }
+ ],
+ "raw": []
+}

@@ -48,6 +48,7 @@ class FaceState:
     iris_px: float = 0.0                # mean iris diameter, px (0 = not visible)
     depth_mm: float = 0.0               # camera to eyes, mm (0 = unknown)
     depth_src: str = ""                 # "iris" (learning this face) | "face" (face width, learned via iris)
+    jaw_open: float = -1.0              # blendshape jawOpen 0..1 (pose-robust); -1 = not available
 
     def scalars(self) -> dict:
         d = asdict(self)
@@ -160,7 +161,7 @@ class FaceTracker:
             opts = vision.FaceLandmarkerOptions(
                 base_options=BaseOptions(model_asset_path=str(self.cfg.path(self.cfg.face.model_path))),
                 running_mode=vision.RunningMode.VIDEO, num_faces=1,
-                output_facial_transformation_matrixes=True)
+                output_facial_transformation_matrixes=True, output_face_blendshapes=True)
             self.landmarker = vision.FaceLandmarker.create_from_options(opts)
         except Exception as e:
             self.error = f"face model failed to load: {e!r}"
@@ -232,12 +233,16 @@ class FaceTracker:
         yaw = pitch = 0.0
         if res.facial_transformation_matrixes:
             yaw, pitch = yaw_pitch_from_matrix(res.facial_transformation_matrixes[0])
+        jaw = -1.0
+        if getattr(res, "face_blendshapes", None):
+            jaw = next((c.score for c in res.face_blendshapes[0] if c.category_name == "jawOpen"), -1.0)
         e = self._ema
         e.alpha = self.cfg.face.ema_alpha
         st = FaceState(
             True, fr.ts, latency, e("yaw", yaw), e("pitch", pitch), e("ratio", ratio),
             (e("mx", mouth[0]), e("my", mouth[1])), e("fw", face_w), w, h,
             [px(i) for i in LIPS + OVAL], iris_px=e("iris", iris) if iris else 0.0)
+        st.jaw_open = e("jaw", jaw) if jaw >= 0 else -1.0
         return self._with_depth(st)
 
     def _with_depth(self, st: FaceState) -> FaceState:
@@ -259,6 +264,7 @@ class FaceTracker:
         fw = f * SIM_FACE_WIDTH_MM / z * math.cos(math.radians(min(abs(yaw), 40.0)))
         st = FaceState(True, fr.ts, 1.0, yaw, s["pitch"], 0.15 if s["mouth_open"] else 0.01, (cx, cy), fw, w, h,
                        None, True, iris_px=f * self.cfg.offsets.iris_mm / z)
+        st.jaw_open = 0.6 if s["mouth_open"] else 0.02
         return self._with_depth(st)
 
 

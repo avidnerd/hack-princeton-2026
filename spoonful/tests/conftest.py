@@ -16,7 +16,9 @@ def pytest_configure(config):
 
 @pytest.fixture
 def cfg():
-    return C.load()
+    c = C.load()
+    c.face.yaw_center_deg, c.face.pitch_offset_deg = 0.0, 0.0   # gate tests use a face looking at the camera
+    return c
 
 
 @pytest.fixture
@@ -35,6 +37,18 @@ def fast_cfg(tmp_path):
     c.fsm.pre_delivery_timeout_s = 3
     c.offsets.joint_map = str(tmp_path / "no_map.json")
     c.gate.require_go = False          # GO-button behaviour has its own tests (test_go_button.py)
+    # plate tests use two unlabelled bowls, independent of the live config (which tracks the real table)
+    c.plate.bowls = [C.BowlCfg(name="bowl1", roi=(700, 420, 280, 280)), C.BowlCfg(name="bowl2", roi=(980, 420, 280, 280))]
+    c.plate.track.calib_file = str(tmp_path / "table_calib.json")
+    c.plate.track.table_min_v_px = 0       # the fake cameras in the tests put the table anywhere in the picture
+    c.plate.probe.enabled = False          # feel-for-the-bottom and the spoon check have their own tests (test_probe.py)
+    c.plate.spoon_check.enabled = False
+    c.face.yaw_center_deg, c.face.pitch_offset_deg = 0.0, 0.0   # the sim face looks straight at the camera
+    # the sim trajectories were made with the original spoon model; the live config holds the measured real spoon
+    c.kinematics.tool_mm, c.kinematics.tool_offset_mm, c.kinematics.spoon_measured = 191.8, 30.0, False
+    c.kinematics.face_zone.x = (235.0, 600.0)
+    c.arm.stop_torque_off_after_s = 1.0      # test_fsm checks the torque-off path; the live arm holds instead
+    c.voice.requests = True                # voice food requests have tests; the live config may be button-only
     c.esp32.button_role = "stop"
     c.esp32.stop_switch = "none"        # STOP-switch behaviour has its own tests (test_stop_switch.py)
     return c

@@ -2,6 +2,8 @@
 scripts/preflight.py."""
 from __future__ import annotations
 
+import os
+
 import time
 from pathlib import Path
 
@@ -65,6 +67,17 @@ def run_checks(cfg: Config, backend_kind: str, camera: bool = True) -> tuple[boo
     if lib.has("pre_delivery"):
         item(not K.in_face_zone(cfg.kinematics, lib.pose("pre_delivery")), "pre_delivery outside the face zone",
              "re-teach pre_delivery ~10 cm further back, or shrink kinematics.face_zone")
+    if cfg.plate.enabled:
+        scoops = {b.name: (b.scoop or f"scoop_{b.name}") for b in cfg.plate.bowls}
+        untaught = [s for s in scoops.values() if not lib.has(s)]
+        item(not untaught, "plate: a taught scoop for every bowl" + (f" (missing {untaught})" if untaught else ""),
+             "Teach > scoop_bowl1, scoop_bowl2, ... (one per bowl spot)", warn=True)
+        for s in scoops.values():
+            if lib.has(s):
+                item(not K.in_face_zone(cfg.kinematics, lib.path(s)[-1]), f"{s} ends outside the face zone",
+                     "re-teach it away from the diner")
+        item(bool(os.environ.get("GEMINI_API_KEY")), "plate vision: GEMINI_API_KEY set",
+             "put a Gemini key in .env, or type the foods in Operator > Plate", warn=True)
     for n in ("rest",) + REQUIRED_PATHS:
         if lib.has(n):
             item(not K.in_face_zone(cfg.kinematics, lib.path(n)[-1] if lib.items[n].kind == "path" else lib.pose(n)),

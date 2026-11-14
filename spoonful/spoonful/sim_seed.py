@@ -51,6 +51,8 @@ def seed(cfg: Config) -> list[str]:
         "present": [poses["pre_delivery"][0], P(260, 250, 90), poses["mouth_nominal"][0]],
         "retreat": [poses["pre_delivery"][0], P(205, 255, 92), rest],
     }
+    for name, b in (("scoop_bowl1", +25), ("scoop_bowl2", +55)):   # two bowl spots on the arm's left
+        paths[name] = [rest, P(190, 175, 110, b), P(195, 135, 125, b), P(220, 140, 120, b), P(210, 185, 112, b)]
     for name, ps in {**poses, **paths}.items():
         kind = "pose" if name in poses else "path"
         speed = "near_face" if name in ("present", "pre_delivery", "mouth_nominal") else "normal"

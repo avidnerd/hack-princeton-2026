@@ -116,3 +116,25 @@ def test_go_never_stops_and_voice_stop_still_wins(go_system):
     time.sleep(0.2)
     assert s.fsm.state.value == "STOPPED"
     assert "spacebar" in s.fsm.explain()
+
+
+def test_button_only_mode_voice_can_stop_but_not_start(sim_system):
+    s = sim_system
+    s.cfg.voice.requests = False
+    start_listening(s)
+    s.on_voice("bite", "Spoonful, a bite please", 0.9)
+    s.on_voice(None, "Spoonful, applesauce", 0.9)
+    time.sleep(0.4)
+    assert s.fsm.state.value == "LISTENING"                  # voice did not start a bite
+    s.fsm.post("go", source="button")
+    wait_state(s, "SCOOPING")                                 # the button does
+    s.on_voice("stop", "stop", 0.3)
+    wait_state(s, "STOPPED")                                  # and voice STOP still works
+
+
+def test_go_in_idle_starts_the_session_and_the_bite(sim_system):
+    s = sim_system
+    wait_state(s, "IDLE")
+    s.fsm.post("go", source="button")
+    wait_state(s, "SCOOPING")
+    assert s.fsm.session.active

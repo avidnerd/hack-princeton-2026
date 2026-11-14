@@ -45,9 +45,60 @@ class XarmBackend(ArmBackend):
         except Exception:
             pass
 
-    def read_all(self, ids):
-        servos = [self._xarm.Servo(i) for i in ids]
+    CMD_GET_POSITION = 21
+    READ_TIMEOUT_S = 0.15
+    SINGLE_TIMEOUT_S = 0.06
+
+    @property
+    def round_robin(self) -> bool:
+        """The Arm reads one joint per tick over USB HID (see _read_positions_hid)."""
+        return self.c is not None and not getattr(self.c, "_is_serial", True)
+
+    def read_one(self, sid: int) -> Optional[int]:
         with self._lock:
+            try:
+                r = self._read_positions_hid([int(sid)], self.SINGLE_TIMEOUT_S)
+            except Exception as e:
+                raise BackendError(f"read servo {sid}: {e!r}") from e
+        return r[int(sid)] if r else None
+
+    def _read_positions_hid(self, ids, timeout_s: Optional[float] = None) -> Optional[dict[int, int]]:
+        """getPosition, done properly over USB HID. The library waits only 50 ms for the reply and then fails; on
+        this controller a 6-servo reply often takes longer (about 45% of reads failed, 2026-11-14), and that late
+        reply was then taken as the answer to the NEXT request. Here: drain stale reports, send, wait up to
+        READ_TIMEOUT_S for the reply to THIS command, and map positions by the servo ids in the reply."""
+        dev = self.c._device
+        while dev.read(64, 0):                       # drop late replies to earlier requests
+            pass
+        self.c._send(self.CMD_GET_POSITION, bytearray([len(ids), *ids]))
+        deadline = time.monotonic() + (timeout_s or self.READ_TIMEOUT_S)
+        while time.monotonic() < deadline:
+            rep = dev.read(64, 10)
+            if not rep or len(rep) < 5 or rep[0] != 0x55 or rep[1] != 0x55 or rep[3] != self.CMD_GET_POSITION:
+                continue
+            data = rep[4:4 + rep[2]]
+            n = data[0] if data else 0
+            out = {}
+            for k in range(n):
+                sid, lo, hi = data[1 + 3 * k], data[2 + 3 * k], data[3 + 3 * k]
+                out[sid] = _s16(hi * 256 + lo)
+            if all(i in out for i in ids):
+                return out
+        return None
+
+    def read_all(self, ids):
+        ids = [int(i) for i in ids]
+        with self._lock:
+            if not getattr(self.c, "_is_serial", True):
+                for _ in range(self.retries + 1):
+                    try:
+                        r = self._read_positions_hid(ids)
+                    except Exception:
+                        r = None
+                    if r is not None:
+                        return {i: r[i] for i in ids}
+                return {i: None for i in ids}
+            servos = [self._xarm.Servo(i) for i in ids]
             for _ in range(self.retries + 1):
                 try:
                     self.c.getPosition(servos)
@@ -73,8 +124,12 @@ class XarmBackend(ArmBackend):
 
     def unload(self, ids):
         with self._lock:
+            # One servo per command: this controller ignored a multi-servo servoOff([6,5,4,3,2]) (arm stayed stiff,
+            # 2026-11-14) but obeys single ones. Gripper not in `ids` keeps holding the spoon.
             try:
-                self.c.servoOff([int(i) for i in ids])
+                for i in ids:
+                    self.c.servoOff(int(i))
+                    time.sleep(0.02)
             except Exception as e:
                 raise BackendError(f"servoOff failed: {e!r}") from e
 

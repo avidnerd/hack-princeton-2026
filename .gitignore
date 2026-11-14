@@ -19,3 +19,8 @@ spoonful/data/*.log
 spoonful/data/tts_cache/
 spoonful/data/sessions/*
 !spoonful/data/sessions/.gitkeep
+
+# per-machine calibration and editor settings
+spoonful/data/table_calib.json
+spoonful/data/autocal/
+.vscode/

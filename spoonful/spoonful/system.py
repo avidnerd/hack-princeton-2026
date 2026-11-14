@@ -13,6 +13,7 @@ from .log import Log
 from .perception.camera import Camera
 from .perception.face import FaceTracker
 from .perception.food import FoodWatcher
+from .perception.plate import PlateWatcher, asks_whats_on_plate
 from .perception.gate import Gate
 from .perception.face import REF_W, focal_px
 from .perception.offsets import OffsetMap, OffsetTracker, fit
@@ -76,11 +77,109 @@ class System:
         self._switch_prev: Optional[bool] = None
         if opts.voice is not None:
             cfg.voice.enabled = opts.voice
-        self.voice = VoiceListener(cfg, lambda cmd, text, conf: self.fsm.post(cmd, source="voice"), self.log)
+        self.voice = VoiceListener(cfg, self.on_voice, self.log)
+        self.plate_camera = None
+        if cfg.plate.enabled and cfg.plate.camera_index >= 0 and opts.camera:
+            self.plate_camera = Camera(cfg.camera.model_copy(update={"index": cfg.plate.camera_index}))
+        cam = self.plate_camera or self.camera
+        self.plate = PlateWatcher(cfg, lambda: (lambda f: f.image if f else None)(cam.latest()),
+                                  active_fn=lambda: self.fsm.state.value == "LISTENING")   # only during a session
+        self.fsm.plate = self.plate
+        from .brain.planner import Planner
+        self.planner = Planner(None, self.log)
+
+        def anchor(bowl: str):
+            from .arm.scoop_style import scoop_anchor
+            name = self.plate.scoop_for(bowl)
+            return scoop_anchor(cfg.kinematics, self.lib.items[name].poses) if self.lib.has(name) else None
+        self.plate.anchor_fn = anchor
+        from .brain.table_auto import TableAutoCal
+        self.table_auto = TableAutoCal(self)
+        self.plate.autocal_status_fn = self.table_auto.status
+        self.plate.spoon_frame_fn = lambda: (lambda f: f.image if f else None)(self.camera.latest())
         self.recorder = Recorder(cfg, self.arm, self.lib.dir, self.profiles.current.name)
         self.calib_samples: list[dict] = []
         self.summary_outbox: list[dict] = []
         self.started_at = time.time()
+
+    REQUEST_WORDS: tuple = ("have", "want", "give", "bite", "some", "please", "more", "eat", "try", "next")
+
+    def on_voice(self, cmd: Optional[str], text: str, conf: float) -> None:
+        """Voice: stop first, always. Then plate questions and food requests ("a bite of the applesauce"),
+        then plain commands. cmd is None when the wake word was heard but no command keyword was."""
+        if cmd == "stop":
+            self.fsm.post("stop", source="voice")
+            return
+        p = self.plate
+        if not self.cfg.voice.requests:          # button-only bites: voice can STOP, and (select) pick the food
+            if self.cfg.voice.select and p.enabled:
+                if asks_whats_on_plate(text):
+                    self.speaker.say_text(p.describe())
+                    return
+                bowl = p.find(text)
+                if bowl and len(text.split()) <= 7:        # "Spoonful, the rice": fast path, no model needed
+                    self.fsm.post("select", source="voice", bowl=bowl)
+                elif self.ask_planner(text):
+                    pass                                   # Gemini plans; the answer is spoken when it's back
+                elif bowl:
+                    self.fsm.post("select", source="voice", bowl=bowl)
+                elif cmd is None and any(w in text.lower() for w in self.REQUEST_WORDS + ("switch", "change")):
+                    self.speaker.say_text("I don't see that on the plate. " + p.describe())
+            return
+        if p.enabled:
+            if asks_whats_on_plate(text):
+                self.speaker.say_text(p.describe())
+                return
+            bowl = p.find(text)
+            if bowl and cmd in (None, "bite"):
+                self.fsm.post("bite", source="voice", bowl=bowl)
+                return
+            if cmd is None and any(w in text.lower() for w in self.REQUEST_WORDS):
+                self.speaker.say_text("I don't see that on the plate. " + p.describe())
+                return
+        if cmd:
+            self.fsm.post(cmd, source="voice")
+
+    def planner_scene(self) -> list[dict]:
+        out = []
+        for b in self.plate.status()["bowls"]:
+            out.append({"name": b["name"], "food": b["food"], "amount": b["amount"], "texture": b["texture"],
+                        "empty": b["empty"], "taught": self.lib.has(b["scoop"])})
+        return out
+
+    def ask_planner(self, text: str) -> bool:
+        """Open-ended request -> Gemini plan -> verified -> executed (speech, which bowl next, a queue of bites).
+        Never moves the arm directly. False if no model is available (caller falls back to simple matching)."""
+        if self.planner.generate is None:
+            self.planner.generate = self.plate.text_generate
+        if not self.planner.available:
+            return False
+
+        def done(steps, problems):
+            said = False
+            has_say = any(st["skill"] == "say" for st in steps)   # a decline is only spoken if nothing else is
+            for st in steps:
+                if st["skill"] == "say":
+                    self.speaker.say_text(st["text"])
+                    said = True
+                elif st["skill"] == "select":
+                    self.fsm.post("select", source="planner", bowl=st["bowl"], quiet=said)
+                elif st["skill"] == "queue":
+                    self.fsm.post("queue", source="planner", bowls=st["bowls"])
+                elif st["skill"] == "decline" and not said and not has_say:
+                    self.speaker.say_text(st["reason"] or "I can't do that")
+                    said = True
+            if not steps:
+                self.speaker.say_text("Sorry, I didn't get that")
+
+        def failed(e):
+            self.log.event("plan_failed", detail_error=repr(e)[:200])
+            bowl = self.plate.find(text)
+            if bowl:
+                self.fsm.post("select", source="voice", bowl=bowl)
+            else:
+                self.speaker.say_text("Sorry, I couldn't think that through")
+        return self.planner.plan_async(text, self.planner_scene(), done, failed)
 
     def on_stop_switch(self, closed: Optional[bool]) -> None:
         """ESP32 STOP input. closed=None means the switch can't be read (device lost after it was connected).
@@ -113,6 +212,9 @@ class System:
         self.fsm.start()
         self.esp32.start()
         self.voice.start()
+        if self.plate_camera:
+            self.plate_camera.start()
+        self.plate.start()
         if self.opts.watchdog:
             self.watchdog.start()
         if self.lib.errors:
@@ -124,8 +226,10 @@ class System:
             self.arm.hold("shutdown")
         except Exception:
             pass
-        for c in (self.watchdog, self.voice, self.esp32):
+        for c in (self.watchdog, self.voice, self.esp32, self.plate):
             c.stop()
+        if self.plate_camera:
+            self.plate_camera.stop()
         self.fsm.stop_thread()
         self.face.stop()
         self.camera.stop()
