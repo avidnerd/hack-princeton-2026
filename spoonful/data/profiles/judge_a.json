@@ -1,0 +1,15 @@
+{
+ "name": "judge_a",
+ "approach_speed": 1.0,
+ "hold_s": 3.0,
+ "bite_size": "full",
+ "preferred_food": "",
+ "mouth_offset_mm": [
+  0.0,
+  0.0
+ ],
+ "pace_scale": 1.0,
+ "learned_interval_s": 0.0,
+ "speech": true,
+ "auto_pace": false
+}

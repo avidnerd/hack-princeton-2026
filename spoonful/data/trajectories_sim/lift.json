@@ -1,0 +1,84 @@
+{
+ "name": "lift",
+ "kind": "path",
+ "meta": {
+  "recorded_at": "2026-11-12T01:46:23",
+  "backend": "sim",
+  "note": "IK placeholder, not taught"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": -40.0,
+    "shoulder": -32.12,
+    "elbow": 67.93,
+    "wrist_pitch": 76.19,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 333,
+    "shoulder": 366,
+    "elbow": 783,
+    "wrist_pitch": 817,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.1,
+   "deg": {
+    "base": -30.0,
+    "shoulder": -38.07,
+    "elbow": 71.87,
+    "wrist_pitch": 66.2,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 375,
+    "shoulder": 341,
+    "elbow": 799,
+    "wrist_pitch": 776,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.2,
+   "deg": {
+    "base": -10.0,
+    "shoulder": -40.43,
+    "elbow": 81.16,
+    "wrist_pitch": 51.27,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 458,
+    "shoulder": 332,
+    "elbow": 838,
+    "wrist_pitch": 714,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.30000000000000004,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -39.1,
+    "elbow": 83.19,
+    "wrist_pitch": 45.9,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 337,
+    "elbow": 847,
+    "wrist_pitch": 691,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  }
+ ],
+ "raw": []
+}

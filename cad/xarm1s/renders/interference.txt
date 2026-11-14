@@ -1,0 +1,21 @@
+Overlap volumes against the gripper proxy (mm^3). 0 = clear.
+Mount           vs servo body           0.00
+Mount           vs front ear            0.00
+Mount           vs rear ear             0.00
+Mount           vs finger layer         0.00
+Mount           vs cable exit           0.00
+Mount           vs wrist bracket        0.00
+Cradle_M        vs servo body           0.00
+Cradle_M        vs front ear            0.00
+Cradle_M        vs rear ear             0.00
+Cradle_M        vs finger layer         0.00
+Cradle_M        vs cable exit           0.00
+Cradle_M        vs wrist bracket        0.00
+Cap             vs servo body           0.00
+Cap             vs front ear            0.00
+Cap             vs rear ear             0.00
+Cap             vs finger layer         0.00
+Cap             vs cable exit           0.00
+Cap             vs wrist bracket        0.00
+
+Side play per side at the crush ribs: 0.15 mm (sand the ribs if it won't go on).

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spoonful</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="fault-banner" class="banner hidden"></div>
+<main class="layout">
+  <section class="view">
+    <div class="cam-wrap" id="cam-wrap">
+      <img id="cam" src="/stream" alt="camera with overlay">
+      <div class="badge" id="state-badge">BOOT</div>
+      <div class="countdown hidden" id="countdown"></div>
+      <div class="calib-hint hidden" id="calib-hint">Click the spoon tip</div>
+    </div>
+    <div class="verdict" id="verdict">Starting</div>
+    <div class="explain" id="explain"></div>
+  </section>
+
+  <aside class="side">
+    <button class="stop" id="btn-stop" title="Spacebar">STOP</button>
+    <div class="row">
+      <button class="big" id="btn-pause">PAUSE</button>
+      <button class="big primary" id="btn-bite">Bite</button>
+    </div>
+    <div class="row">
+      <button id="btn-session">Start session</button>
+      <button id="btn-reset" class="hidden">Reset</button>
+    </div>
+    <div class="stats">
+      <div><span class="k">Bites</span><span class="v" id="bites">0</span></div>
+      <div><span class="k">Pace</span><span class="v small" id="pace">-</span></div>
+    </div>
+    <label class="profile">Diner
+      <select id="profile"></select>
+    </label>
+    <ol class="timeline" id="timeline"></ol>
+    <div class="foot">
+      <a href="/caregiver">Caregiver view</a>
+      <button class="link" id="btn-operator">Operator (o)</button>
+    </div>
+  </aside>
+</main>
+
+<div class="drawer hidden" id="drawer">
+  <header>
+    <h2>Operator</h2>
+    <nav class="tabs" id="tabs">
+      <button data-tab="teach" class="on">Teach</button>
+      <button data-tab="calibrate">Calibrate</button>
+      <button data-tab="config">Thresholds</button>
+      <button data-tab="health">Health</button>
+      <button data-tab="sim">Sim</button>
+      <button data-tab="log">Log</button>
+    </nav>
+    <button class="link" id="drawer-close">Close</button>
+  </header>
+
+  <section data-pane="teach">
+    <p class="note">Only in IDLE. Torque turns off on the arm joints while recording: support the arm.</p>
+    <div class="row wrap">
+      <select id="teach-name">
+        <option>scoop</option><option>scoop_small</option><option>scoop_full</option><option>lift</option>
+        <option>present</option><option>retreat</option>
+      </select>
+      <button id="teach-start">Record path</button>
+      <button id="teach-stop" class="primary big">DONE</button>
+    </div>
+    <div class="row wrap">
+      <select id="pose-name"><option>rest</option><option>pre_delivery</option><option>mouth_nominal</option></select>
+      <button id="pose-save">Save current pose</button>
+      <button id="torque-off">Torque off</button><button id="torque-on">Torque on</button>
+    </div>
+    <div class="joints" id="joints"></div>
+    <div class="row wrap">
+      <select id="replay-name"></select>
+      <label>speed <input id="replay-speed" type="number" value="0.8" step="0.1" min="0.1" max="1"></label>
+      <button id="replay-dry">Dry run</button>
+      <button id="replay-live">Replay live</button>
+    </div>
+    <pre id="plan" class="plan"></pre>
+    <table class="traj" id="traj"></table>
+  </section>
+
+  <section data-pane="calibrate" class="hidden">
+    <p class="note">Calibration mode allows approach without a diner. Nobody in the chair.</p>
+    <div class="row wrap">
+      <button id="calib-on">Calibration mode ON</button><button id="calib-off">OFF</button>
+    </div>
+    <h3>Offset map</h3>
+    <p class="note">For each label: move the spoon (hand with torque off, or jog), then click the tip on the camera image.</p>
+    <p class="note">Optional depth: <b>away</b> = tip moved 30 mm straight away from the camera (it should barely
+      move in the image); <b>toward</b> = 30 mm toward it. Tape-measure lens to tip at nominal for exact depth.</p>
+    <div class="row wrap" id="calib-labels"></div>
+    <label>lens to tip at nominal (mm, optional) <input id="calib-depth" type="number" min="150" max="1500" placeholder="from FOV"></label>
+    <div class="jog" id="jog"></div>
+    <div class="row wrap"><button id="calib-fit" class="primary">Fit map</button><button id="calib-clear">Clear samples</button></div>
+    <pre id="calib-out" class="plan"></pre>
+    <h3>Delivery window</h3>
+    <p class="note">Drag a box on the camera image after pressing this.</p>
+    <button id="window-draw">Draw window</button>
+  </section>
+
+  <section data-pane="config" class="hidden">
+    <div id="cfg"></div>
+    <button id="cfg-save">Save to config.yaml</button>
+  </section>
+
+  <section data-pane="health" class="hidden">
+    <pre id="health" class="plan"></pre>
+  </section>
+
+  <section data-pane="sim" class="hidden">
+    <p class="note">Simulated face (start with --sim-face) and simulated servos (--backend sim).</p>
+    <div class="row wrap">
+      <label><input type="checkbox" id="sim-present" checked> face present</label>
+      <label><input type="checkbox" id="sim-open"> mouth open</label>
+      <label>yaw <input type="range" id="sim-yaw" min="-45" max="45" value="0"></label>
+      <label>dx <input type="range" id="sim-dx" min="-200" max="200" value="0"></label>
+      <label>lean back (mm) <input type="range" id="sim-dz" min="-120" max="120" value="0"></label>
+    </div>
+    <div class="row wrap">
+      <button id="sim-block">Jam elbow (contact)</button><button id="sim-unblock">Release</button>
+    </div>
+  </section>
+
+  <section data-pane="log" class="hidden">
+    <pre id="log" class="plan"></pre>
+  </section>
+</div>
+
+<div class="modal hidden" id="modal"><div class="modal-body"><p id="modal-text"></p>
+  <div class="row"><button id="modal-cancel">Cancel</button><button id="modal-ok" class="primary">Confirm</button></div>
+</div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

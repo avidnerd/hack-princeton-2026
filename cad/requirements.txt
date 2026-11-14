@@ -1,0 +1,7 @@
+# CAD build + renders (spoonful_xarm.py, render_assembly.py, preview.py). Separate venv from spoonful/.
+# Resolved for Python 3.12 on macOS arm64 and Windows x64 (2026-11-13).
+cadquery==2.8.0
+trimesh==5.2.0
+pyrender==0.1.45
+numpy
+pillow

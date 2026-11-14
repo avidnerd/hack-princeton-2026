@@ -1,0 +1,66 @@
+{
+ "name": "present",
+ "kind": "path",
+ "meta": {
+  "recorded_at": "2026-11-12T01:46:23",
+  "backend": "sim",
+  "note": "IK placeholder, not taught"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -39.1,
+    "elbow": 83.19,
+    "wrist_pitch": 45.9,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 337,
+    "elbow": 847,
+    "wrist_pitch": 691,
+    "wrist_roll": 500
+   },
+   "speed": "near_face"
+  },
+  {
+   "t": 0.1,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -18.28,
+    "elbow": 75.52,
+    "wrist_pitch": 32.76,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 424,
+    "elbow": 815,
+    "wrist_pitch": 636,
+    "wrist_roll": 500
+   },
+   "speed": "near_face"
+  },
+  {
+   "t": 0.2,
+   "deg": {
+    "base": 0.0,
+    "shoulder": 3.75,
+    "elbow": 56.79,
+    "wrist_pitch": 29.46,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 516,
+    "elbow": 737,
+    "wrist_pitch": 623,
+    "wrist_roll": 500
+   },
+   "speed": "near_face"
+  }
+ ],
+ "raw": []
+}

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/spoonful.db*
+data/tts_cache/
+data/sessions/
+data/sidecar.log
+sidecar/node_modules/
+models/*.task
+.pytest_cache/
+.DS_Store

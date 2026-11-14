@@ -1,0 +1,21 @@
+# environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+.DS_Store
+Thumbs.db
+
+# secrets: copy .env by hand, never commit it
+.env
+!.env.example
+
+# runtime data (per machine): logs, TTS cache, sessions
+spoonful/data/*.db
+spoonful/data/*.db-*
+spoonful/data/*.log
+spoonful/data/tts_cache/
+spoonful/data/sessions/*
+!spoonful/data/sessions/.gitkeep

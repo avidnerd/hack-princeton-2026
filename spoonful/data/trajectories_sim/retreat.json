@@ -1,0 +1,66 @@
+{
+ "name": "retreat",
+ "kind": "path",
+ "meta": {
+  "recorded_at": "2026-11-12T01:46:23",
+  "backend": "sim",
+  "note": "IK placeholder, not taught"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -39.1,
+    "elbow": 83.19,
+    "wrist_pitch": 45.9,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 337,
+    "elbow": 847,
+    "wrist_pitch": 691,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.1,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -37.47,
+    "elbow": 71.49,
+    "wrist_pitch": 57.98,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 344,
+    "elbow": 798,
+    "wrist_pitch": 742,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.2,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -30.0,
+    "elbow": 70.0,
+    "wrist_pitch": 40.0,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 375,
+    "elbow": 792,
+    "wrist_pitch": 667,
+    "wrist_roll": 500
+   },
+   "speed": "normal"
+  }
+ ],
+ "raw": []
+}

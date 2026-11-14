@@ -1,0 +1,17 @@
+# pinned to the versions verified on 2026-11-12 (python 3.12, macOS arm64)
+xarm==0.0.4
+hidapi==0.15.0
+mediapipe==1.2.3
+opencv-python==5.0.0.93
+fastapi==0.162.5
+uvicorn==0.54.0
+pydantic==2.14.3
+PyYAML==6.0.3
+faster-whisper==1.2.1
+elevenlabs==2.77.0
+google-genai==3.2.0
+pyserial==3.5
+sounddevice
+numpy
+httpx
+pytest

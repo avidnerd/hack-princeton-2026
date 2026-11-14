@@ -1,0 +1,30 @@
+{
+ "name": "pre_delivery",
+ "kind": "pose",
+ "meta": {
+  "recorded_at": "2026-11-12T01:46:23",
+  "backend": "sim",
+  "note": "IK placeholder, not taught"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": 0.0,
+    "shoulder": -39.1,
+    "elbow": 83.19,
+    "wrist_pitch": 45.9,
+    "wrist_roll": 0.0
+   },
+   "units": {
+    "base": 500,
+    "shoulder": 337,
+    "elbow": 847,
+    "wrist_pitch": 691,
+    "wrist_roll": 500
+   },
+   "speed": "near_face"
+  }
+ ],
+ "raw": []
+}
