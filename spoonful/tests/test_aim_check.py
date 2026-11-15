@@ -45,7 +45,7 @@ def aim_system(sim_system, tmp_path, monkeypatch):
 
 
 def _run(s, bowl="bowl1"):
-    s.aim_check.start(bowl)
+    s.aim_check.start([bowl])
     t0 = time.time()
     while s.aim_check.running and time.time() - t0 < 90:
         time.sleep(0.05)
@@ -89,3 +89,73 @@ def test_wild_camera_answer_is_not_applied(aim_system):
     res = _run(s)
     assert res["state"] == "problem" and "Retake" in res["message"]
     assert scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses) == before
+
+
+# ---------------------------------------------------------------- before every scoop
+def _camera(s, truth):
+    kin = s.cfg.kinematics
+    s.plate._point = lambda jpg: (lambda p: {"point": [p[1] / 0.72, p[0] / 1.28]})(project(K.fk(kin, s.arm.state.deg)))
+    s.plate.image_generate = lambda jpg, prompt: (lambda p: {"base": [p[1] / 0.72, p[0] / 1.28]})(project(truth()))
+
+
+def _know_camera(s, bowl="bowl1"):
+    """What calibrate() would have measured for this camera, without the test moves."""
+    x, y = scoop_anchor(s.cfg.kinematics, s.lib.items[f"scoop_{bowl}"].poses)
+    yaw = math.atan2(y, x)
+    out, left = np.array([math.cos(yaw), math.sin(yaw), 0]), np.array([-math.sin(yaw), math.cos(yaw), 0])
+    s.aim_check.jacobians[bowl] = np.array([CAM @ out, CAM @ left, CAM @ np.array([0, 0, 1.0])])
+
+
+def _looks(s):
+    s.log.flush()
+    return [r["detail"] for r in s.log.query("SELECT detail FROM events WHERE type='look' ORDER BY rowid")]
+
+
+def test_a_bowl_moved_after_setup_is_followed_before_the_scoop(aim_system):
+    from test_fsm import start_listening
+    s = aim_system
+    kin = s.cfg.kinematics
+    s.plate.set_label("bowl1", "applesauce")
+    x0, y0 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    r = math.hypot(x0, y0)
+    moved_to = np.array([x0 + 30 * x0 / r + 20 * y0 / r, y0 + 30 * y0 / r - 20 * x0 / r, 0.0])    # bumped 3.6 cm
+    _know_camera(s)
+    _camera(s, lambda: moved_to)
+    start_listening(s)
+    s.fsm.post("bite", source="ui", bowl="bowl1")
+    wait_state(s, "LIFTING", timeout=40)
+    x1, y1 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    assert math.hypot(x1 - moved_to[0], y1 - moved_to[1]) < 8            # it scooped where the bowl is now
+    looks = _looks(s)
+    assert len(looks) == 2 and '"followed": true' in looks[0]            # looked, followed, looked again to confirm
+
+
+def test_no_view_of_the_bowl_scoops_where_it_was(aim_system):
+    from test_fsm import start_listening
+    s = aim_system
+    kin = s.cfg.kinematics
+    s.plate.set_label("bowl1", "applesauce")
+    before = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    _know_camera(s)
+    s.plate._point = lambda jpg: {"point": None}
+    s.plate.image_generate = lambda jpg, prompt: {"base": None}
+    start_listening(s)
+    s.fsm.post("bite", source="ui", bowl="bowl1")
+    wait_state(s, "LIFTING", timeout=40)
+    assert scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses) == before
+    assert '"seen": false' in _looks(s)[0]
+
+
+def test_a_bowl_that_is_gone_stops_the_bite(aim_system):
+    from test_fsm import start_listening
+    s = aim_system
+    kin = s.cfg.kinematics
+    s.plate.set_label("bowl1", "applesauce")
+    x0, y0 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    _know_camera(s)
+    _camera(s, lambda: np.array([x0 + 120, y0 + 90, 0.0]))                # 15 cm away
+    start_listening(s)
+    s.fsm.post("bite", source="ui", bowl="bowl1")
+    wait_state(s, "LISTENING", timeout=40)                                # it backs off instead of scooping air
+    assert s.fsm.session.taken == 0
+    assert scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses) == (x0, y0)

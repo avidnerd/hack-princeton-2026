@@ -263,6 +263,15 @@ function renderSetup() {
     if (drawn !== $("photo-svg").dataset.drawn) { $("photo-svg").dataset.drawn = drawn; drawBowls(t); }
   }
 
+  const aim = u.aim || { running: null, results: {}, calibrated: [] };
+  $("s-camera").disabled = !idle || !bowls.length || !!aim.running;
+  $("s-camera").classList.toggle("primary", bowls.length > 0 && aim.calibrated.length < bowls.length);
+  $("s-camera-out").textContent = bowls.map((b) => {
+    const r = aim.results[b.name];
+    return r ? `${cap(b.food)}: ${r.message}` : "";
+  }).filter(Boolean).join("  ·  ") || (bowls.length && !aim.calibrated.length
+    ? "Run the camera check so the spoon is lined up over each bowl, now and before every scoop." : "");
+  $("s-camera-out").classList.toggle("bad", Object.values(aim.results).some((r) => r.state === "problem"));
   chip("s-look-chip", u.looking.at ? `Saved ${clock(u.looking.at)}` : "Not set", u.looking.at);
   const ready = u.mouth.set && bowls.length && u.looking.at;
   chip("s-ready-chip", ready ? "Ready" : "Finish the steps above", ready);
@@ -275,6 +284,7 @@ function renderSetup() {
 $("s-release").onclick = () => post("torque", { on: false });
 $("s-mouth-save").onclick = () => post("setup/mouth/save").then((r) => { if (r.ok) loadTraj(); });
 $("s-done").onclick = () => toggleDrawer(false);
+$("s-camera").onclick = () => post("setup/aim/camera", { bowl: "all" });
 $("s-use").onclick = () => post("setup/bowls", { ids: [...picked] }).then((r) => { if (r.ok) loadTraj(); });
 $("photo-svg").onclick = (e) => { const g = e.target.closest(".bowl"); if (g) togglePick(+g.dataset.id); };
 $("photo-svg").onkeydown = (e) => {

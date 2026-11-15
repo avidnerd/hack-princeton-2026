@@ -89,6 +89,7 @@ class System:
         self.fsm.plate = self.plate
         from .brain.aim_check import AimCheck
         self.aim_check = AimCheck(self)
+        self.fsm.aim = self.aim_check
         self.setup_state: dict = {}                # what Setup has done this run (see brain/photo_setup.status)
         from .brain.planner import Planner
         self.planner = Planner(None, self.log)

@@ -159,9 +159,9 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
 
     @r.post("/api/setup/aim/camera")
     def aim_camera(b: Aim):
-        """Check this bowl's aim with the webcam and correct it (see brain/aim_check.py)."""
+        """Check the aim with the webcam and correct it: one bowl, or every bowl when bowl is "all"."""
         try:
-            sys.aim_check.start(b.bowl)
+            sys.aim_check.start(list(sys.plate.bowls) if b.bowl == "all" else [b.bowl])
         except photo_setup.SetupProblem as e:
             raise HTTPException(409, str(e))
         return {"ok": True}

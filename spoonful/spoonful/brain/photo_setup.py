@@ -180,6 +180,8 @@ def use_bowls(sys, ids: list[int]) -> list[dict]:
     sys.lib.reload()
     sys.plate.reset_bowls()
     sys.fsm.last_bowl, sys.fsm.bite_queue = None, []
+    sys.aim_check.forget()                       # new bowls, maybe a moved laptop: the camera check starts over
+    sys.setup_state["nudges"] = {}
     result = []
     for c in chosen:
         sys.food_surface.est[c["name"]] = c["_surface"]
@@ -223,20 +225,14 @@ def aim(sys, name: str) -> None:
     sys.arm.goto(above, "normal", 0.5, name="aim")
 
 
-def nudge(sys, name: str, further_mm: float, left_mm: float) -> dict:
+def move_scoop(sys, name: str, further_mm: float, left_mm: float) -> None:
     """Move this bowl's scoop on the table: further from / closer to the arm's base, and to the arm's left / right.
-    The lift is rebuilt to start where the scoop now ends, and the spoon moves to show the new aim."""
+    The lift is rebuilt to start where the scoop now ends. Raises SetupProblem if the spoon can't scoop there."""
     from ..arm.scoop_style import scoop_anchor, shift_scoop
-    if sys.fsm.state.value != "IDLE":
-        raise SetupProblem("End the session first.")
     kin = sys.cfg.kinematics
-    scoop = sys.lib.items[f"scoop_{name}"].poses if sys.lib.has(f"scoop_{name}") else None
-    if scoop is None:
+    if not sys.lib.has(f"scoop_{name}"):
         raise SetupProblem("That bowl has no scoop yet. Map the table first.")
-    total = sys.setup_state.setdefault("nudges", {}).get(name, [0.0, 0.0])
-    new_total = [total[0] + further_mm, total[1] + left_mm]
-    if math.hypot(*new_total) > MAX_NUDGE_MM:
-        raise SetupProblem("That's more than 6 cm from where the photo put the bowl. Retake the photo instead.")
+    scoop = sys.lib.items[f"scoop_{name}"].poses
     x, y = scoop_anchor(kin, scoop)
     r = math.hypot(x, y)
     dx = further_mm * x / r - left_mm * y / r
@@ -265,8 +261,19 @@ def nudge(sys, name: str, further_mm: float, left_mm: float) -> dict:
         moves["scoop"], moves["lift"] = moves[f"scoop_{name}"], moves[f"lift_{name}"]
     QS.save_all(sys.cfg, sys.lib.dir, {"moves": moves})
     sys.lib.reload()
+    sys.log.event("scoop_moved", detail_bowl=name, further_mm=round(further_mm, 1), left_mm=round(left_mm, 1))
+
+
+def nudge(sys, name: str, further_mm: float, left_mm: float) -> dict:
+    """A correction made from the Setup screen: move the scoop, then hover over the new spot to show it."""
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    total = sys.setup_state.setdefault("nudges", {}).get(name, [0.0, 0.0])
+    new_total = [total[0] + further_mm, total[1] + left_mm]
+    if math.hypot(*new_total) > MAX_NUDGE_MM:
+        raise SetupProblem("That's more than 6 cm from where the photo put the bowl. Retake the photo instead.")
+    move_scoop(sys, name, further_mm, left_mm)
     sys.setup_state["nudges"][name] = new_total
-    sys.log.event("scoop_nudge", detail_bowl=name, further_mm=further_mm, left_mm=left_mm, total=new_total)
     aim(sys, name)
     return {"further_mm": new_total[0], "left_mm": new_total[1]}
 

@@ -1,24 +1,29 @@
-"""Camera aim check: before trusting a scoop, look and see whether the spoon is really over the bowl.
+"""Camera aim check: look and see whether the spoon is really over the bowl, at setup and before every scoop.
 
-The table photo places a bowl to within a centimetre or two; a small cup needs better. So for each bowl:
+The table photo places a bowl to within a centimetre or two, and a bowl can be moved after the photo. So the webcam
+has the last word on where the spoon dips.
 
-  1. Hover the spoon above where it will dip.
-  2. Learn how the picture responds to the arm (an image Jacobian, measured, not assumed): move the tip 20 mm
-     further, 20 mm left and 20 mm up, and see how far its pixel moves each time. No camera calibration is needed.
-  3. Find the bowl in the same picture: the centre of its base, where it rests on the table.
-  4. The spoon tip is at a known height. Subtracting that height's worth of pixel shift gives the spot on the table
-     directly under the tip. Its distance from the bowl's base, turned back into millimetres with the Jacobian, is
-     how far the scoop is off.
-  5. Move the scoop by that much (photo_setup.nudge) and look again to confirm.
+Once per bowl (calibrate, about 30 s):
+  Hover the spoon above the bowl and move the tip 20 mm further, 20 mm left and 20 mm up, noting how far its pixel
+  moves each time. That is the image Jacobian, measured rather than assumed: no camera calibration is needed. It is
+  kept only while the app runs, because it is wrong as soon as the laptop is moved.
 
-A side-on webcam sees left-right well and depth less well, so corrections are capped, a correction that doesn't
-reduce the error is undone, and nothing is changed when the camera can't see the spoon or the bowl clearly.
+Every look (about 2 s, one webcam frame):
+  Find the spoon tip and the centre of the bowl's base (where it rests on the table). The tip is at a known height;
+  subtracting that height's worth of pixel shift gives the table point directly under the tip. Its distance from
+  the bowl's base, turned back into millimetres with the Jacobian, is how far the scoop is off.
+
+At setup the scoop is corrected and checked again. Before each scoop the FSM pauses above the bowl, looks, and
+moves the scoop if the bowl isn't where it was (brain/fsm.py). A side-on webcam sees left-right well and depth less
+well, so corrections are capped, a setup correction that doesn't reduce the error is undone, and nothing changes
+when the camera can't see the spoon or the bowl clearly.
 """
 from __future__ import annotations
 
 import math
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import numpy as np
@@ -28,7 +33,8 @@ from . import photo_setup
 from . import quick_setup as QS
 
 PROBE_MM = 20
-MAX_FIX_MM = 35            # larger than this: the camera and the photo disagree badly; ask for a new photo
+MAX_FIX_MM = 35            # setup: more than this means the camera and the photo disagree badly
+MAX_FOLLOW_MM = 60         # before a scoop: follow a bowl that moved up to this far
 GOOD_MM = 7                # within this the aim is confirmed
 MIN_SHIFT_PX = 4           # a 20 mm move must show up at least this much in the picture
 SETTLE_S = 0.7
@@ -61,31 +67,39 @@ class AimCheck:
         self.s = system
         self.running: Optional[str] = None
         self.results: dict[str, dict] = {}
+        self.jacobians: dict[str, np.ndarray] = {}      # bowl -> 3x2: px per mm of further / left / up
         self._abort = threading.Event()
+        self._pending: Optional[dict] = None            # result of the look started by the FSM
+
+    # ------------------------------------------------------------------ what was learned about the camera
+    def _jacobian(self, bowl: str) -> Optional[np.ndarray]:
+        """This bowl's, or another bowl's on the same table (same camera, nearby)."""
+        if bowl in self.jacobians:
+            return self.jacobians[bowl]
+        return next(iter(self.jacobians.values()), None)
+
+    def forget(self) -> None:
+        """The table was mapped again (the laptop or the bowls may have moved)."""
+        self.jacobians, self.results = {}, {}
 
     def status(self) -> dict:
-        return {"running": self.running, "results": self.results}
+        return {"running": self.running, "results": self.results, "calibrated": sorted(self.jacobians)}
 
-    def start(self, bowl: str) -> None:
-        if self.running:
-            raise photo_setup.SetupProblem("Already checking a bowl.")
-        if self.s.fsm.state.value != "IDLE":
-            raise photo_setup.SetupProblem("End the session first.")
-        if self.s.plate._point is None or self.s.plate.image_generate is None:
-            raise photo_setup.SetupProblem("Vision isn't available. Check the Gemini key.")
-        self._abort.clear()
-        self.running = bowl
-        self.results[bowl] = {"state": "checking", "message": "Looking at the spoon"}
-        threading.Thread(target=self._run, args=(bowl,), name="aim-check", daemon=True).start()
+    def ready(self, bowl: str) -> bool:
+        return (self._jacobian(bowl) is not None and self.s.plate._point is not None
+                and self.s.plate.image_generate is not None)
 
-    # ------------------------------------------------------------------ pieces
-    def _goto(self, pose: dict) -> None:
-        if self._abort.is_set() or self.s.fsm.state.value != "IDLE":
-            raise AimProblem("Stopped.")
-        m = self.s.arm.goto(pose, "normal", 0.5, name="aim_check")
-        if not m.wait(15).ok:
-            raise AimProblem("The arm couldn't make a test move.")
-        time.sleep(SETTLE_S)
+    # ------------------------------------------------------------------ looking
+    def aim_pose(self, bowl: str, dr: float = 0.0, dl: float = 0.0, dz: float = 0.0) -> dict:
+        kin = self.s.cfg.kinematics
+        dip = photo_setup._dip(self.s, bowl)
+        x, y, z = K.fk(kin, dip)
+        r = math.hypot(x, y)
+        px, py = x + dr * x / r - dl * y / r, y + dr * y / r + dl * x / r
+        q = dict(dip)
+        q["base"] = kin.zero_deg["base"] + math.degrees(math.atan2(py, px)) / kin.sign["base"]
+        QS.LIMITS = self.s.cfg.arm.soft_limits_deg
+        return QS._at(kin, q, math.hypot(px, py), z + photo_setup.AIM_ABOVE_MM + dz)
 
     def _tip_px(self) -> np.ndarray:
         for _ in range(2):
@@ -108,21 +122,75 @@ class AimCheck:
             raise AimProblem(f"The webcam can't see the {food or 'bowl'} clearly.")
         return np.array([float(b[1]) * 1.28, float(b[0]) * 0.72])
 
-    def _measure(self, bowl: str, food: str) -> tuple[float, float]:
-        """Hover, probe, look: how far (further_mm, left_mm) the spoon is from being over the bowl."""
-        s, kin = self.s, self.s.cfg.kinematics
-        dip = photo_setup._dip(s, bowl)
-        x, y, z = K.fk(kin, dip)
-        r, yaw = math.hypot(x, y), math.atan2(y, x)
-        QS.LIMITS = s.cfg.arm.soft_limits_deg
+    def look(self, bowl: str) -> tuple[float, float]:
+        """With the spoon hovering over the bowl: (further_mm, left_mm) from the spoon to the bowl, from one glance."""
+        J = self._jacobian(bowl)
+        if J is None:
+            raise AimProblem("The camera hasn't been checked for this bowl yet.")
+        food = self.s.plate.food_of(bowl) or "bowl"
+        with ThreadPoolExecutor(max_workers=2) as ex:                    # the two questions at the same time
+            tip_f, bowl_f = ex.submit(self._tip_px), ex.submit(self._bowl_px, food)
+            tip, base = tip_f.result(), bowl_f.result()
+        height = float(K.fk(self.s.cfg.kinematics, self.s.arm.state.deg)[2])
+        return solve_offset(tip, base, height, J[0], J[1], J[2])
 
-        def pose(dr=0.0, dl=0.0, dz=0.0) -> dict:
-            px, py = x + dr * x / r - dl * y / r, y + dr * y / r + dl * x / r
-            q = dict(dip)
-            q["base"] = kin.zero_deg["base"] + math.degrees(math.atan2(py, px)) / kin.sign["base"]
-            return QS._at(kin, q, math.hypot(px, py), z + photo_setup.AIM_ABOVE_MM + dz)
+    # ------------------------------------------------------------------ before a scoop (called by the FSM)
+    def look_async(self, bowl: str) -> None:
+        self._pending = pending = {"bowl": bowl, "done": False}
+
+        def run():
+            try:
+                pending["offset"] = self.look(bowl)
+            except Exception as e:
+                pending["error"] = str(e)
+            pending["done"] = True
+        threading.Thread(target=run, name="aim-look", daemon=True).start()
+
+    def take_result(self) -> Optional[dict]:
+        p = self._pending
+        if p is None or not p["done"]:
+            return None
+        self._pending = None
+        return p
+
+    def follow(self, bowl: str, further_mm: float, left_mm: float) -> bool:
+        """Move the scoop to where the camera sees the bowl. False if the spoon can't scoop there."""
         try:
-            poses = [pose(), pose(dr=PROBE_MM), pose(dl=PROBE_MM), pose(dz=PROBE_MM)]
+            photo_setup.move_scoop(self.s, bowl, further_mm, left_mm)
+            return True
+        except photo_setup.SetupProblem:
+            return False
+
+    # ------------------------------------------------------------------ at setup
+    def start(self, bowls: list[str]) -> None:
+        if self.running:
+            raise photo_setup.SetupProblem("Already checking a bowl.")
+        if self.s.fsm.state.value != "IDLE":
+            raise photo_setup.SetupProblem("End the session first.")
+        if self.s.plate._point is None or self.s.plate.image_generate is None:
+            raise photo_setup.SetupProblem("Vision isn't available. Check the Gemini key.")
+        if not bowls:
+            raise photo_setup.SetupProblem("Choose the bowls first.")
+        self._abort.clear()
+        self.running = bowls[0]
+        for b in bowls:
+            self.results[b] = {"state": "checking", "message": "Waiting"}
+        threading.Thread(target=self._run_all, args=(list(bowls),), name="aim-check", daemon=True).start()
+
+    def _goto(self, pose: dict) -> None:
+        if self._abort.is_set() or self.s.fsm.state.value != "IDLE":
+            raise AimProblem("Stopped.")
+        m = self.s.arm.goto(pose, "normal", 0.5, name="aim_check")
+        if not m.wait(15).ok:
+            raise AimProblem("The arm couldn't make a test move.")
+        time.sleep(SETTLE_S)
+
+    def calibrate(self, bowl: str) -> None:
+        """Three small test moves above the bowl: how arm motion shows up in the webcam picture. Ends hovering."""
+        s, kin = self.s, self.s.cfg.kinematics
+        try:
+            poses = [self.aim_pose(bowl), self.aim_pose(bowl, dr=PROBE_MM), self.aim_pose(bowl, dl=PROBE_MM),
+                     self.aim_pose(bowl, dz=PROBE_MM)]
         except QS.SetupError as e:
             raise AimProblem("The arm can't make its test moves around that bowl.") from e
         seen, tips = [], []
@@ -130,61 +198,68 @@ class AimCheck:
             self._goto(q)
             seen.append(self._tip_px())
             tips.append(np.array(K.fk(kin, s.arm.state.deg)))          # where the arm really is (sag included)
-        # pixels per mm, from where the tip really went
-        cols = []
-        for i in (1, 2, 3):
-            if np.linalg.norm(seen[i] - seen[0]) < MIN_SHIFT_PX and i != 3:
-                raise AimProblem("The spoon barely moves in the webcam picture. Turn the laptop to see it from the side.")
-            cols.append(seen[i] - seen[0])
-        moved = np.array([tips[i] - tips[0] for i in (1, 2, 3)])        # rows: actual (dx, dy, dz) of each probe
+        if min(np.linalg.norm(seen[i] - seen[0]) for i in (1, 2)) < MIN_SHIFT_PX:
+            raise AimProblem("The spoon barely moves in the webcam picture. Turn the laptop to see it from the side.")
+        x, y, _ = tips[0]
+        yaw = math.atan2(y, x)
         out_dir = np.array([math.cos(yaw), math.sin(yaw), 0.0])
         left_dir = np.array([-math.sin(yaw), math.cos(yaw), 0.0])
-        basis = np.column_stack([moved @ out_dir, moved @ left_dir, moved[:, 2]])   # each probe in (further, left, up)
+        moved = np.array([tips[i] - tips[0] for i in (1, 2, 3)])        # what each test move really was, in mm
+        basis = np.column_stack([moved @ out_dir, moved @ left_dir, moved[:, 2]])
         try:
-            Jt = np.linalg.solve(basis, np.array(cols))                 # rows: px per mm of further / left / up
+            self.jacobians[bowl] = np.linalg.solve(basis, np.array([seen[i] - seen[0] for i in (1, 2, 3)]))
         except np.linalg.LinAlgError as e:
             raise AimProblem("The test moves were too small to measure.") from e
         self._goto(poses[0])
-        tip = self._tip_px()
-        height = float(K.fk(kin, s.arm.state.deg)[2])
-        return solve_offset(tip, self._bowl_px(food), height, Jt[0], Jt[1], Jt[2])
 
-    def _run(self, bowl: str) -> None:
+    def _check(self, bowl: str) -> None:
         s = self.s
-        food = s.plate.food_of(bowl) or "bowl"
         res = self.results[bowl]
+        res.update(state="checking", message="Looking at the spoon")
+        self.calibrate(bowl)
+        f, l = self.look(bowl)
+        off = math.hypot(f, l)
+        s.log.event("aim_check", detail_bowl=bowl, further_mm=round(f, 1), left_mm=round(l, 1))
+        if off <= GOOD_MM:
+            res.update(state="ok", message=f"Lined up (within {off:.0f} mm)")
+            return
+        if off > MAX_FIX_MM:
+            res.update(state="problem", message=f"The webcam sees the spoon {off / 10:.0f} cm from the bowl. "
+                                                "Retake the table photo.")
+            return
+        res.update(message=f"Off by {off:.0f} mm. Correcting")
+        photo_setup.move_scoop(s, bowl, f, l)
+        self._goto(self.aim_pose(bowl))
+        f2, l2 = self.look(bowl)
+        off2 = math.hypot(f2, l2)
+        s.log.event("aim_check", detail_bowl=bowl, after_fix=True, further_mm=round(f2, 1), left_mm=round(l2, 1))
+        if off2 < off - 2:
+            res.update(state="ok" if off2 <= 2 * GOOD_MM else "problem",
+                       message=f"Corrected by {off:.0f} mm; now within {off2:.0f} mm")
+        else:                                           # the correction didn't help: the camera was wrong, undo it
+            photo_setup.move_scoop(s, bowl, -f, -l)
+            res.update(state="problem", message="Couldn't confirm the aim from this camera angle. "
+                                                "Use Show aim and the arrows.")
+
+    def _run_all(self, bowls: list[str]) -> None:
+        s = self.s
         try:
-            f, l = self._measure(bowl, food)
-            off = math.hypot(f, l)
-            s.log.event("aim_check", detail_bowl=bowl, further_mm=round(f, 1), left_mm=round(l, 1))
-            if off <= GOOD_MM:
-                res.update(state="ok", message=f"Lined up (within {off:.0f} mm)")
-            elif off > MAX_FIX_MM:
-                res.update(state="problem", message=f"The webcam sees the spoon {off / 10:.0f} cm from the {food}. "
-                                                    "Retake the table photo.")
-            else:
-                res.update(message=f"Off by {off:.0f} mm. Correcting")
-                photo_setup.nudge(s, bowl, f, l)
-                time.sleep(SETTLE_S)
-                f2, l2 = self._measure(bowl, food)
-                off2 = math.hypot(f2, l2)
-                s.log.event("aim_check", detail_bowl=bowl, after_fix=True, further_mm=round(f2, 1), left_mm=round(l2, 1))
-                if off2 < off - 2:
-                    res.update(state="ok" if off2 <= 2 * GOOD_MM else "problem",
-                               message=f"Corrected by {off:.0f} mm; now within {off2:.0f} mm")
-                else:                                       # the correction didn't help: the camera was wrong, undo
-                    photo_setup.nudge(s, bowl, -f, -l)
-                    res.update(state="problem", message="Couldn't confirm the aim from this camera angle. "
-                                                        "Use Check aim and the nudge buttons.")
-        except (AimProblem, photo_setup.SetupProblem) as e:
-            res.update(state="problem", message=str(e))
-        except Exception as e:
-            s.log.event("aim_check_failed", detail_error=repr(e)[:200])
-            res.update(state="problem", message="The check failed. Use Check aim and the nudge buttons.")
+            for bowl in bowls:
+                self.running = bowl
+                try:
+                    self._check(bowl)
+                except (AimProblem, photo_setup.SetupProblem) as e:
+                    self.results[bowl].update(state="problem", message=str(e))
+                except Exception as e:
+                    s.log.event("aim_check_failed", detail_error=repr(e)[:200])
+                    self.results[bowl].update(state="problem", message="The check failed. Use Show aim and the arrows.")
+                if self._abort.is_set() or s.fsm.state.value != "IDLE":
+                    break
         finally:
             self.running = None
             try:
                 if s.fsm.state.value == "IDLE":
-                    photo_setup.aim(s, bowl)                # finish hovering over the bowl, for the eye to confirm
+                    rest = s.lib.pose("rest") if s.lib.has("rest") else dict(s.cfg.arm.home_pose)
+                    s.arm.goto(dict(rest), "normal", 0.6, name="aim_done")
             except Exception:
                 pass

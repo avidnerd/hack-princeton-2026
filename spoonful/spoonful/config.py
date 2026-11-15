@@ -284,6 +284,8 @@ class PlateCfg(_M):
     spoon_check: SpoonCheckCfg = SpoonCheckCfg()
     scoop_styles: dict[str, ScoopStyle] = {k: ScoopStyle(**v) for k, v in DEFAULT_SCOOP_STYLES.items()}
     default_texture: str = "soft"              # when neither vision nor the food name says
+    look_before_scoop: bool = True             # every bite: pause above the bowl, check the aim with the webcam, follow
+                                               # the bowl if it moved (needs "Check aim with camera" done once per bowl)
     explain_attack: bool = True                # say why, on the first bite from each bowl ("Jelly is firm: I'll cut in")
     empty_confirm: int = 2                     # consecutive "empty" answers before a bowl counts as finished
     bowls: list[BowlCfg] = []

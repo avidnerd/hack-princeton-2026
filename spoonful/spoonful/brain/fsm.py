@@ -22,6 +22,7 @@ from ..arm import kinematics as K
 from ..arm.arm import Arm, Motion, MotionDenied
 from ..arm.contact import Contact
 from ..arm.scoop_style import adapt_scoop, dip_index, shape_scoop, shift_scoop
+from .aim_check import MAX_FOLLOW_MM
 from ..arm.trajectory import Library, Pose, check_limits, lerp_pose, plan
 from ..config import ARM_JOINTS, Config, ScoopStyle
 from ..log import Log
@@ -94,6 +95,7 @@ class Bite:
     source: str
     bowl: Optional[str] = None
     texture: Optional[str] = None
+    looks: int = 0                          # webcam aim checks made for this scoop
     attack: Optional[str] = None            # scoop strategy used (skim / dig / stab_and_saw / scrape / ladle)
     rescoops: int = 0
     spoon: Optional[dict] = None            # last spoon check answer
@@ -153,6 +155,8 @@ class FSM:
         self.plate = None                      # PlateWatcher (perception/plate.py), set by System
         self.last_bowl: Optional[str] = None
         self.bite_queue: list[str] = []
+        self.aim = None                        # aim_check.AimCheck (System): the webcam checks the aim before a scoop
+        self._look: Optional[dict] = None
         self.food_surface = None               # photo_map.FoodSurface (System): predict -> feel -> update        # planner: "a little of each" -> one bowl per GO press   # GO / plain "bite" repeats the last food asked for
         self.on_summary: Optional[Callable[[int, str], None]] = None
         self.session_last_id: Optional[int] = None
@@ -614,6 +618,72 @@ class FSM:
             self._start_bite("pace", now)
 
     def _enter_scooping(self) -> None:
+        self._look = None
+        if self.bite:
+            self.bite.looks = 0
+        self._scoop_begin()
+
+    # ------------------------------------------------------------------ look before scooping
+    LOOK_TIMEOUT_S = 6.0
+    LOOK_AGAIN_MM = 15          # after following the bowl this far, look once more from the new spot
+
+    def _start_look(self) -> bool:
+        """Pause above the bowl and ask the webcam whether the spoon is over it (brain/aim_check.py)."""
+        b = self.bite
+        if not (self.cfg.plate.look_before_scoop and self.aim is not None and b and b.bowl
+                and b.looks < 2 and self.aim.ready(b.bowl)):
+            return False
+        try:
+            pose = self.aim.aim_pose(b.bowl)
+            self.motion = self.arm.run(plan(self.cfg, self.arm.current(), [([pose], "normal", "aim")], 1.0, "aim"))
+        except Exception as e:
+            self.log.event("look_skipped", detail_error=str(e)[:160])
+            return False
+        self._look = {"stage": "moving", "bowl": b.bowl}
+        return True
+
+    def _in_look(self, now: float) -> None:
+        lk = self._look
+        if lk["stage"] == "moving":
+            r = self._motion_result()
+            if r is None:
+                return
+            if r != "ok":
+                self._look = None
+                self._handle_motion_failure(r, now)
+                return
+            lk.update(stage="looking", t=now)
+            self.aim.look_async(lk["bowl"])
+            return
+        res = self.aim.take_result()
+        if res is None and now - lk["t"] < self.LOOK_TIMEOUT_S:
+            return
+        self._look = None
+        self.bite.looks += 1
+        again = False
+        if res and "offset" in res:
+            f, l = res["offset"]
+            off = math.hypot(f, l)
+            moved = False
+            if 4 <= off <= MAX_FOLLOW_MM:
+                moved = self.aim.follow(lk["bowl"], f, l)
+                again = moved and off >= self.LOOK_AGAIN_MM
+                if moved and off >= self.LOOK_AGAIN_MM and self.bite.looks == 1:
+                    food = self.plate.food_of(lk["bowl"]) or "bowl"
+                    self.speaker.say_text(f"The {food} moved. Following it")
+            elif off > MAX_FOLLOW_MM:
+                self.speaker.say_text("I can't line up with that bowl. Please check it")
+            self.log.event("look", detail_bowl=lk["bowl"], further_mm=round(f, 1), left_mm=round(l, 1),
+                           off_mm=round(off, 1), followed=moved)
+            if off > MAX_FOLLOW_MM:
+                self.bite.outcome = "aim_lost"
+                self._go(S.RETREAT, "bowl not where expected")
+                return
+        else:
+            self.log.event("look", detail_bowl=lk["bowl"], seen=False, why=(res or {}).get("error", "no answer in time"))
+        self._scoop_begin(look=again)
+
+    def _scoop_begin(self, look: bool = True) -> None:
         self._probe_job = None
         prof = self.profiles.current
         scoop = prof.scoop_path if self.lib.has(prof.scoop_path) else "scoop"
@@ -625,6 +695,8 @@ class FSM:
             return
         if not (self.bite and self.bite.bowl and self.plate is not None):
             self._run_paths([(scoop, "normal")], name="scoop")
+            return
+        if look and self._start_look():
             return
         # How hard to dig depends on the food: same taught scoop, deeper / slower / with a saw for firm food.
         texture, why = self.plate.texture_of(self.bite.bowl)
@@ -806,6 +878,9 @@ class FSM:
         return False
 
     def _in_scooping(self, now: float) -> None:
+        if self._look:
+            self._in_look(now)
+            return
         r = self._motion_result()
         if r == "ok" and self._probe_next(now):
             return
