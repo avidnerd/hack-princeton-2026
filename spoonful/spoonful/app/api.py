@@ -398,14 +398,14 @@ def photo_upload(req: Request, b: PhotoUpload):
     """An overhead photo chosen as a file on the laptop (the phone link posts to /api/phone/photo instead)."""
     import cv2
     import numpy as np
-    from ..brain.photo_setup import SetupProblem, map_table
+    from ..brain.photo_setup import SetupProblem, find_bowls
     from ..perception.photo_map import decode_upload
     sys = _sys(req)
     img = cv2.imdecode(np.frombuffer(decode_upload(b.image), np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(400, "That isn't an image.")
     try:
-        return {"ok": True, **map_table(sys, img)}
+        return {"ok": True, "candidates": find_bowls(sys, img)}
     except SetupProblem as e:
         raise HTTPException(409, str(e))
 
@@ -422,14 +422,6 @@ def setup_mouth_save(req: Request):
         raise HTTPException(409, str(e))
     sys.arm.torque(True)
     return {"ok": True, **r}
-
-
-@router.get("/photo/annotated")
-def photo_annotated(req: Request):
-    p = _sys(req).cfg.path("data/photo_map.jpg")
-    if not p.exists():
-        raise HTTPException(404, "no photo yet")
-    return Response(p.read_bytes(), media_type="image/jpeg")
 
 
 @router.get("/surface")

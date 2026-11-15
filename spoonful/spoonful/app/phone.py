@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
 
 from ..brain import photo_setup
 
@@ -38,13 +39,17 @@ def lan_ip() -> str:
         s.close()
 
 
+class Chosen(BaseModel):
+    ids: list[int]
+
+
 class PhoneLink:
     def __init__(self, port: int):
         self.token = secrets.token_hex(4)
         self.port = port
         self.count = 0
         self.received_at: float | None = None
-        self.status = "waiting"            # waiting | mapping | done | problem
+        self.status = "waiting"            # waiting | finding | choose | done | problem
         self.message = ""
         self._ip = (0.0, "127.0.0.1")
 
@@ -83,24 +88,22 @@ class LocalOnly:
 
 
 def handle_photo(sys, link: PhoneLink, img) -> None:
-    """Save the photo for the Setup screen, then map the table in the background."""
-    import cv2
-    cv2.imwrite(str(sys.cfg.path("data/phone_photo.jpg")), img)
+    """Find the bowls in the photo in the background; the Setup screen then asks which ones to serve from."""
     link.count += 1
     link.received_at = time.time()
-    link.status, link.message = "mapping", "Finding the bowls"
+    link.status, link.message = "finding", "Finding the bowls"
 
     def run():
         try:
-            r = photo_setup.map_table(sys, img)
-            n = len(r["bowls"])
-            link.status, link.message = "done", f"{n} bowl{'s' if n != 1 else ''} mapped"
+            found = photo_setup.find_bowls(sys, img)
+            n = sum(1 for c in found if c["ok"])
+            link.status, link.message = "choose", f"{n} bowl{'s' if n != 1 else ''} in reach. Choose which to serve."
         except photo_setup.SetupProblem as e:
             link.status, link.message = "problem", str(e)
         except Exception as e:
-            sys.log.event("photo_map_failed", detail_error=repr(e)[:200])
-            link.status, link.message = "problem", "Mapping failed. Retake the photo."
-    threading.Thread(target=run, name="map-table", daemon=True).start()
+            sys.log.event("photo_bowls_failed", detail_error=repr(e)[:200])
+            link.status, link.message = "problem", "Couldn't read the photo. Retake it."
+    threading.Thread(target=run, name="find-bowls", daemon=True).start()
 
 
 def make_router(sys, link: PhoneLink) -> APIRouter:
@@ -127,6 +130,16 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
         handle_photo(sys, link, img)
         return {"ok": True}
 
+    @r.post("/api/setup/bowls")
+    def choose_bowls(b: Chosen):
+        try:
+            bowls = photo_setup.use_bowls(sys, b.ids)
+        except photo_setup.SetupProblem as e:
+            raise HTTPException(409, str(e))
+        n = len(bowls)
+        link.status, link.message = "done", f"Serving from {n} bowl{'s' if n != 1 else ''}"
+        return {"ok": True, "bowls": bowls}
+
     @r.get("/api/phone/link")
     def phone_link():
         return link.state()
@@ -139,8 +152,8 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
         return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
     @r.get("/api/phone/photo.jpg")
-    def latest(mapped: int = 0):
-        p = sys.cfg.path("data/photo_map.jpg" if mapped else "data/phone_photo.jpg")
+    def latest():
+        p = sys.cfg.path("data/phone_photo.jpg")
         if not p.exists():
             raise HTTPException(404)
         return Response(p.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})

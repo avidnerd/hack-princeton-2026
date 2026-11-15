@@ -173,18 +173,47 @@ const STRATEGY_TEXT = { skim: "Skim", dig: "Dig", stab_and_saw: "Stab and saw", 
 const AMOUNT_TEXT = { full: "full", half: "half full", low: "nearly empty", empty: "empty" };
 const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const cap = (t) => t ? t[0].toUpperCase() + t.slice(1) : "";
-let photoShown = "";
 let fileBusy = false;
+let photoKey = "";              // which photo the overlay was built for
+const picked = new Set();       // bowl ids ticked in the photo
 
 function chip(id, text, done) {
   const c = $(id);
   c.textContent = text;
   c.closest(".step").classList.toggle("done", !!done);
 }
-function showPhoto(mapped) {
-  const img = $("photo-img");
-  img.src = `/api/phone/photo.jpg?mapped=${mapped ? 1 : 0}&t=${Date.now()}`;
-  img.classList.remove("hidden");
+// The photo with every bowl outlined. Selecting an outline (or its row) adds or removes that bowl.
+function drawBowls(t) {
+  const cands = t.candidates;
+  const [w, h] = t.photo_size || [1, 1];
+  const svg = $("photo-svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.innerHTML = cands.map((c) => {
+    const cls = !c.ok ? "off" : picked.has(c.id) ? "on" : "";
+    const pts = c.poly.map((p) => p.join(",")).join(" ");
+    const ty = Math.max(30, c.box[1] - 12);
+    return `<g class="bowl ${cls}" data-id="${c.id}" ${c.ok ? 'tabindex="0" role="checkbox" aria-checked="' + picked.has(c.id) + '"' : ""}>` +
+      `<polygon points="${pts}"></polygon><text x="${c.box[0]}" y="${ty}">${esc(cap(c.food))}</text></g>`;
+  }).join("");
+  $("s-bowls").innerHTML = cands.map((c) => {
+    const detail = !c.ok ? c.why
+      : c.strategy && c.used ? `${STRATEGY_TEXT[c.strategy] || ""} · ${AMOUNT_TEXT[c.amount] || ""}`
+      : c.sure ? (AMOUNT_TEXT[c.amount] || "") : "Not sure this is food";
+    const why = c.used && c.strategy_why ? `<span class="why">${esc(cap(c.strategy_why))}</span>` : "";
+    return `<li class="${c.ok ? "" : "skipped"}"><label><input type="checkbox" data-id="${c.id}" ${picked.has(c.id) ? "checked" : ""} ${c.ok ? "" : "disabled"}>` +
+      `<b>${esc(cap(c.food))}</b></label><span>${esc(cap(detail))}</span>${why}</li>`;
+  }).join("");
+  const used = cands.filter((c) => c.used).map((c) => c.id).sort().join();
+  const now = [...picked].sort().join();
+  $("s-use-row").classList.toggle("hidden", !cands.some((c) => c.ok));
+  $("s-use").disabled = !picked.size || S.fsm.state !== "IDLE" || used === now;
+  $("s-use").textContent = used && used === now ? "Serving these bowls" : "Serve these bowls";
+}
+function togglePick(id) {
+  const c = S.setup.table.candidates.find((x) => x.id === id);
+  if (!c || !c.ok) return;
+  if (picked.has(id)) picked.delete(id); else picked.add(id);
+  drawBowls(S.setup.table);
 }
 function renderSetup() {
   const u = S.setup;
@@ -197,10 +226,11 @@ function renderSetup() {
   $("s-mouth-hint").textContent = !idle ? "End the session to change this."
     : u.mouth.released ? "The arm is released. Support it." : "";
 
-  const bowls = u.table.bowls;
-  chip("s-table-chip", bowls.length ? `${bowls.length} bowl${bowls.length > 1 ? "s" : ""} mapped ${clock(u.table.at)}` : "Not mapped", bowls.length);
-  $("photo-pose").textContent = u.table.posed ? "Spoon is in place" : "Pose for photo";
-  $("photo-pose").disabled = !idle || u.table.posed;
+  const t = u.table;
+  const bowls = t.bowls;
+  chip("s-table-chip", bowls.length ? `Serving ${bowls.length} bowl${bowls.length > 1 ? "s" : ""}` : t.candidates.length ? "Choose bowls" : "No photo yet", bowls.length);
+  $("photo-pose").textContent = t.posed ? "Spoon is in place" : "Pose for photo";
+  $("photo-pose").disabled = !idle || t.posed;
   const ph = u.phone;
   if (ph) {
     const qr = $("phone-qr");
@@ -211,22 +241,29 @@ function renderSetup() {
     }
     if (!fileBusy) {
       const out = $("photo-out");
-      out.textContent = { waiting: "Waiting for a photo", mapping: "Photo received. Finding the bowls." }[ph.status] || ph.message;
+      out.textContent = { waiting: "Waiting for a photo", finding: "Photo received. Finding the bowls." }[ph.status] || ph.message;
       out.classList.toggle("bad", ph.status === "problem");
     }
-    const key = ph.count + ph.status;
-    if (ph.count && key !== photoShown) { photoShown = key; showPhoto(ph.status === "done"); }
   }
-  $("s-bowls").innerHTML = bowls.map((b) =>
-    `<li><b>${esc(cap(b.food) || "Food")}</b><span>${esc(STRATEGY_TEXT[b.strategy] || "")} · ${esc(AMOUNT_TEXT[b.amount] || "")}</span>` +
-    `<span class="why">${esc(cap(b.why))}</span></li>`).join("") +
-    u.table.skipped.map((b) => `<li class="skipped"><b>${esc(cap(b.food))}</b><span>Not used: ${esc(b.why)}</span></li>`).join("");
+  if (t.photo_at) {
+    const key = String(t.photo_at) + t.candidates.length;
+    if (key !== photoKey) {                 // a new photo (or its bowls just arrived): start from the suggested choice
+      if (!photoKey.startsWith(String(t.photo_at))) $("photo-img").src = "/api/phone/photo.jpg?t=" + t.photo_at;
+      photoKey = key;
+      picked.clear();
+      const used = t.candidates.filter((c) => c.used);
+      (used.length ? used : t.candidates.filter((c) => c.ok && c.sure)).forEach((c) => picked.add(c.id));
+      $("photo-wrap").classList.remove("hidden");
+    }
+    const drawn = JSON.stringify([t.candidates.map((c) => [c.id, c.used, c.strategy]), [...picked], S.fsm.state === "IDLE"]);
+    if (drawn !== $("photo-svg").dataset.drawn) { $("photo-svg").dataset.drawn = drawn; drawBowls(t); }
+  }
 
   chip("s-look-chip", u.looking.at ? `Saved ${clock(u.looking.at)}` : "Not set", u.looking.at);
   const ready = u.mouth.set && bowls.length && u.looking.at;
   chip("s-ready-chip", ready ? "Ready" : "Finish the steps above", ready);
   if (bowls.length) {
-    $("s-ready-text").textContent = `Say "Spoonful, give me the ${bowls[0].food || "food"}", then press GO. ` +
+    $("s-ready-text").textContent = `Say "Spoonful, give me the ${bowls[0].food}", then press GO. ` +
       "Press GO again when the spoon is waiting in front of you.";
   }
 }
@@ -234,6 +271,13 @@ function renderSetup() {
 $("s-release").onclick = () => post("torque", { on: false });
 $("s-mouth-save").onclick = () => post("setup/mouth/save").then((r) => { if (r.ok) loadTraj(); });
 $("s-done").onclick = () => toggleDrawer(false);
+$("s-use").onclick = () => post("setup/bowls", { ids: [...picked] }).then((r) => { if (r.ok) loadTraj(); });
+$("photo-svg").onclick = (e) => { const g = e.target.closest(".bowl"); if (g) togglePick(+g.dataset.id); };
+$("photo-svg").onkeydown = (e) => {
+  const g = e.target.closest(".bowl");
+  if (g && (e.key === " " || e.key === "Enter")) { e.preventDefault(); e.stopPropagation(); togglePick(+g.dataset.id); }
+};
+$("s-bowls").onchange = (e) => { if (e.target.dataset.id) togglePick(+e.target.dataset.id); };
 $("photo-pose").onclick = () => post("photo/pose");
 $("photo-go").onclick = () => {
   const f = $("photo-file").files[0];
@@ -244,8 +288,8 @@ $("photo-go").onclick = () => {
   const rd = new FileReader();
   rd.onload = () => post("photo/upload", { image: rd.result }).then((r) => {
     fileBusy = false;
-    if (r.ok) { $("photo-out").textContent = `${r.bowls.length} bowl${r.bowls.length > 1 ? "s" : ""} mapped`; showPhoto(true); loadTraj(); }
-    else { $("photo-out").textContent = r.detail || "Mapping failed."; $("photo-out").classList.add("bad"); }
+    if (r.ok) $("photo-out").textContent = "Choose which bowls to serve.";
+    else { $("photo-out").textContent = r.detail || "Couldn't read the photo."; $("photo-out").classList.add("bad"); }
   });
   rd.readAsDataURL(f);
 };

@@ -2,15 +2,16 @@
 
 save_mouth   the spoon is at the diner's lips (moved there by hand): save the mouth pose, the waiting pose in front
              of it and the face zone around it.
-map_table    one photo from above: find the bowls (photo_map), build a scoop and a lift for each one the arm can
-             reach, and let vision choose how to scoop each food.
+find_bowls   one photo from above: find every bowl (photo_map), outline it, and work out whether the arm can scoop
+             from it. Nothing is changed yet: the diner chooses which bowls to be served from.
+use_bowls    the chosen bowls become the robot's bowls: a scoop and a lift for each, and vision picks how to scoop
+             each food. Bowls that were not chosen are unknown to the robot (voice and planning can't pick them).
 status       what the Setup screen shows for each step.
 """
 from __future__ import annotations
 
 import math
 import time
-from typing import Optional
 
 from ..arm import kinematics as K
 from ..arm.trajectory import plan
@@ -44,23 +45,57 @@ def save_mouth(sys) -> dict:
     return {"tip_mm": [round(x), round(y), round(z)]}
 
 
-def _annotate(img, m: dict, used: set[str]):
+def outline(img, box) -> list[list[int]]:
+    """The bowl's outline inside its box, as a polygon in photo pixels. GrabCut separates the bowl from the table
+    around it; if that gives something implausible, the box's ellipse is used."""
     import cv2
-    out = img.copy()
-    for p, col in ((m["base_px"], (133, 114, 11)), (m["tip_px"], (133, 114, 11))):
-        cv2.drawMarker(out, (int(p[0]), int(p[1])), col, cv2.MARKER_CROSS, 36, 3)
-    for bw in m["bowls"]:
-        col = (76, 138, 31) if bw["name"] in used else (0, 106, 176)
-        bx = [int(v) for v in bw["box_px"]]
-        cv2.rectangle(out, (bx[0], bx[1]), (bx[2], bx[3]), col, 3)
-        label = (bw.get("food") or "food") + ("" if bw["name"] in used else " ?")
-        cv2.putText(out, label, (bx[0], max(24, bx[1] - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, 2)
-    return out
+    import numpy as np
+    x0, y0, x1, y1 = (int(v) for v in box)
+    bw, bh = x1 - x0, y1 - y0
+    ellipse = [[int(x0 + bw / 2 + bw / 2 * math.cos(a)), int(y0 + bh / 2 + bh / 2 * math.sin(a))]
+               for a in (2 * math.pi * k / 24 for k in range(24))]
+    if bw < 12 or bh < 12:
+        return ellipse
+    pad = int(0.25 * max(bw, bh))
+    H, W = img.shape[:2]
+    cx0, cy0, cx1, cy1 = max(0, x0 - pad), max(0, y0 - pad), min(W, x1 + pad), min(H, y1 + pad)
+    crop = img[cy0:cy1, cx0:cx1]
+    k = min(1.0, 220 / max(crop.shape[:2]))
+    small = cv2.resize(crop, None, fx=k, fy=k) if k < 1 else crop
+    rect = (int((x0 - cx0) * k), int((y0 - cy0) * k), max(2, int(bw * k)), max(2, int(bh * k)))
+    mask = np.zeros(small.shape[:2], np.uint8)
+    try:
+        cv2.grabCut(small, mask, rect, np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64), 3,
+                    cv2.GC_INIT_WITH_RECT)
+    except cv2.error:
+        return ellipse
+    fg = ((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)).astype(np.uint8)
+    contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return ellipse
+    c = max(contours, key=cv2.contourArea)
+    if not 0.35 * rect[2] * rect[3] <= cv2.contourArea(c) <= 1.05 * rect[2] * rect[3]:
+        return ellipse
+    c = cv2.approxPolyDP(cv2.convexHull(c), 0.012 * cv2.arcLength(c, True), True).reshape(-1, 2)
+    return [[int(px / k + cx0), int(py / k + cy0)] for px, py in c]
 
 
-def map_table(sys, img) -> dict:
-    """img: BGR overhead photo. Returns {"bowls": [...], "skipped": [...]} or raises SetupProblem."""
+def _public(c: dict) -> dict:
+    return {k: v for k, v in c.items() if not k.startswith("_")}
+
+
+def find_bowls(sys, img) -> list[dict]:
+    """img: BGR overhead photo. Saves it for the Setup screen and returns the bowls found in it, each with an
+    outline and whether the arm can scoop from it. Raises SetupProblem."""
     import cv2
+    h, w = img.shape[:2]
+    k = MAX_PHOTO_PX / max(h, w)
+    if k < 1:
+        img = cv2.resize(img, (int(w * k), int(h * k)))
+    h, w = img.shape[:2]
+    cv2.imwrite(str(sys.cfg.path("data/phone_photo.jpg")), img)
+    sys.setup_state.update(candidates=[], photo_size=[w, h], photo_at=time.time())
+
     if sys.fsm.state.value != "IDLE":
         raise SetupProblem("End the session first, then retake the photo.")
     if sys.plate.image_generate is None:
@@ -71,11 +106,6 @@ def map_table(sys, img) -> dict:
     tip = K.fk(kin, sys.arm.state.deg)
     if math.hypot(tip[0], tip[1]) < MIN_TIP_REACH_MM or tip[2] > MAX_TIP_HEIGHT_MM:
         raise SetupProblem("Press \"Pose for photo\" first, then retake the photo.")
-
-    h, w = img.shape[:2]
-    k = MAX_PHOTO_PX / max(h, w)
-    if k < 1:
-        img = cv2.resize(img, (int(w * k), int(h * k)))
     try:
         m = analyze_robust(img, lambda data: sys.plate.image_generate(data, PROMPT), tip_mm=(tip[0], tip[1]))
     except Exception as e:
@@ -84,13 +114,14 @@ def map_table(sys, img) -> dict:
     QS.LIMITS = sys.cfg.arm.soft_limits_deg
     pre = sys.lib.pose("pre_delivery")
     ref = sys.lib.pose("rest") if sys.lib.has("rest") else dict(sys.cfg.arm.home_pose)
-    moves, bowls, found, skipped = {}, [], [], []
-    for bw in m["bowls"]:
-        food = bw.get("food") or "food"
-        if not bw["name"]:
-            skipped.append({"food": food, "why": f"seen in only {bw['votes']} of {bw['views']} views"})
-            continue
+    found = []
+    for i, bw in enumerate(m["bowls"]):
+        box = [int(v) for v in bw["box_px"]]
         x, y = bw["mm"]
+        c = {"id": i, "food": bw.get("food") or "food", "amount": bw.get("amount"), "texture": bw.get("texture"),
+             "sure": bool(bw["sure"]), "votes": bw["votes"], "views": bw["views"],
+             "uncertainty_mm": bw["uncertainty_mm"], "at_cm": [round(x / 10), round(y / 10)],
+             "box": box, "poly": outline(img, box), "ok": True, "why": "", "used": False}
         surface = predicted_surface_mm(bw.get("amount"))
         try:
             scoop = QS.build_scoop_at(kin, ref, x, y, surface)
@@ -99,43 +130,57 @@ def map_table(sys, img) -> dict:
             lift = QS.build_lift(kin, scoop[-1], pre)
             plan(sys.cfg, scoop[0], [(scoop, "normal", "check")])
             plan(sys.cfg, scoop[-1], [(lift, "normal", "check")])
+            crop = img[max(0, box[1] - 15):box[3] + 15, max(0, box[0] - 15):box[2] + 15]
+            crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            c.update(_scoop=scoop, _lift=lift, _surface=surface, _mm=(x, y),
+                     _crop=cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes())
         except Exception as e:
-            skipped.append({"food": food, "why": "out of reach" if "reach" in str(e) or "limits" in str(e) else str(e)})
-            bw["name"] = None
-            continue
-        moves[f"scoop_{bw['name']}"] = ("path", scoop)
-        moves[f"lift_{bw['name']}"] = ("path", lift)
-        bx = [int(v) for v in bw["box_px"]]
-        crop = img[max(0, bx[1] - 15):bx[3] + 15, max(0, bx[0] - 15):bx[2] + 15]
-        crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        bw["crop_jpg"] = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
-        bowls.append(BowlCfg(name=bw["name"], roi=(0, 0, 1280, 720), label=bw.get("food") or "", watch=False))
-        sys.food_surface.est[bw["name"]] = surface
-        found.append(bw)
-    if not bowls:
-        why = "; ".join(f"{s['food']}: {s['why']}" for s in skipped) or "no bowls found"
-        raise SetupProblem(f"No bowls the arm can reach ({why}). Move them closer and retake the photo.")
+            c.update(ok=False, why="Too close to your face" if "face" in str(e) else "Out of reach")
+        found.append(c)
+    sys.setup_state["candidates"] = found
+    sys.log.event("photo_bowls", detail_found=[_public(c) | {"poly": len(c["poly"])} for c in found],
+                  mm_per_px=round(m["mm_per_px"], 3))
+    if not any(c["ok"] for c in found):
+        raise SetupProblem("No bowls the arm can reach in this photo. Move them closer and retake it."
+                           if found else "No bowls found in this photo. Retake it from straight above.")
+    return [_public(c) for c in found]
 
-    first = bowls[0].name
-    moves["scoop"], moves["lift"] = moves[f"scoop_{first}"], moves[f"lift_{first}"]
+
+def use_bowls(sys, ids: list[int]) -> list[dict]:
+    """Serve from exactly these bowls (ids from find_bowls)."""
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    cands = sys.setup_state.get("candidates") or []
+    chosen = [c for c in cands if c["id"] in set(ids) and c["ok"]]
+    if not chosen:
+        raise SetupProblem("Choose at least one bowl.")
+    chosen.sort(key=lambda c: math.atan2(c["_mm"][1], c["_mm"][0]), reverse=True)     # left to right, as the arm sees them
+    moves, bowls = {}, []
+    for n, c in enumerate(chosen, 1):
+        c["name"] = f"bowl{n}"
+        moves[f"scoop_bowl{n}"] = ("path", c["_scoop"])
+        moves[f"lift_bowl{n}"] = ("path", c["_lift"])
+        bowls.append(BowlCfg(name=c["name"], roi=(0, 0, 1280, 720), label=c["food"], watch=False))
+    moves["scoop"], moves["lift"] = moves["scoop_bowl1"], moves["lift_bowl1"]
     QS.save_all(sys.cfg, sys.lib.dir, {"moves": moves})
     sys.cfg.plate.bowls = bowls
     sys.lib.reload()
     sys.plate.reset_bowls()
+    sys.fsm.last_bowl, sys.fsm.bite_queue = None, []
     result = []
-    for bw in found:
-        sys.plate.bowls[bw["name"]].update(amount=bw.get("amount"), vision_texture=bw.get("texture"))
-        attack = sys.plate.plan_attack(bw["name"], bw["crop_jpg"])
-        next(c for c in sys.cfg.plate.bowls if c.name == bw["name"]).attack = attack
-        result.append({"name": bw["name"], "food": bw.get("food"), "amount": bw.get("amount"),
-                       "strategy": attack["strategy"], "why": attack["why"], "votes": bw["votes"], "views": bw["views"],
-                       "uncertainty_mm": bw["uncertainty_mm"],
-                       "at_cm": [round(bw["mm"][0] / 10), round(bw["mm"][1] / 10)]})
+    for c in chosen:
+        sys.food_surface.est[c["name"]] = c["_surface"]
+        sys.plate.bowls[c["name"]].update(amount=c["amount"], vision_texture=c["texture"])
+        attack = sys.plate.plan_attack(c["name"], c["_crop"])
+        next(b for b in sys.cfg.plate.bowls if b.name == c["name"]).attack = attack
+        c.update(strategy=attack["strategy"], strategy_why=attack["why"])
+        result.append(_public(c))
+    for c in cands:
+        c["used"] = c in chosen
     sys.cfg.save()
-    cv2.imwrite(str(sys.cfg.path("data/photo_map.jpg")), _annotate(img, m, {b.name for b in bowls}))
-    sys.setup_state.update(table_at=time.time(), bowls=result, skipped=skipped)
-    sys.log.event("photo_map", detail_bowls=result, skipped=skipped, mm_per_px=round(m["mm_per_px"], 3))
-    return {"bowls": result, "skipped": skipped}
+    sys.setup_state.update(table_at=time.time(), bowls=result)
+    sys.log.event("photo_map", detail_bowls=[{k: r[k] for k in ("name", "food", "strategy", "at_cm")} for r in result])
+    return result
 
 
 def status(sys) -> dict:
@@ -146,7 +191,8 @@ def status(sys) -> dict:
     return {
         "mouth": {"set": sys.lib.has("mouth_nominal") and sys.lib.has("pre_delivery"), "at": st.get("mouth_at"),
                   "released": not sys.arm.torque_on},
-        "table": {"at": st.get("table_at"), "bowls": st.get("bowls") or [], "skipped": st.get("skipped") or [],
-                  "posed": posed},
+        "table": {"at": st.get("table_at"), "bowls": st.get("bowls") or [], "posed": posed,
+                  "candidates": [_public(c) for c in st.get("candidates") or []],
+                  "photo_size": st.get("photo_size"), "photo_at": st.get("photo_at")},
         "looking": {"at": st.get("looking_at")},
     }

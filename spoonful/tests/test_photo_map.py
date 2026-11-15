@@ -114,50 +114,35 @@ def test_photo_upload_builds_scoops_without_touching(sim_system, tmp_path, monke
     s.plate.image_generate = vision
     r = c.post("/api/photo/upload", json={"image": data})
     assert r.status_code == 200, r.text
-    names = [b["name"] for b in r.json()["bowls"]]
-    assert names
-    for name in names:
-        assert s.lib.has(f"scoop_{name}") and s.lib.has(f"lift_{name}")
-    assert all(b["strategy"] for b in r.json()["bowls"])
-    sc = s.lib.items[f"scoop_{names[0]}"].poses
-    low = min(sc, key=lambda q: K.fk(kin, q)[2])
-    lx, ly, lz = K.fk(kin, low)
-    target = [b for b in bowls if b[1] == s.plate.food_of(names[0])][0][0]
-    assert math.dist((lx, ly), target) < 35                             # it dips into the bowl it saw
-    assert s.food_surface.est                                           # and holds a prediction for each bowl
+    cands = r.json()["candidates"]
+    assert len(cands) == 2 and all(k["ok"] and len(k["poly"]) >= 3 for k in cands)
+    assert not s.lib.has("lift_bowl1")                                   # nothing is built until bowls are chosen
+    assert c.post("/api/setup/bowls", json={"ids": []}).status_code == 409
+
+    rice = next(k for k in cands if k["food"] == "rice")
+    r = c.post("/api/setup/bowls", json={"ids": [rice["id"]]})           # serve only the rice
+    assert r.status_code == 200, r.text
+    served = r.json()["bowls"]
+    assert [b["food"] for b in served] == ["rice"] and served[0]["name"] == "bowl1" and served[0]["strategy"]
+    assert list(s.plate.bowls) == ["bowl1"] and s.plate.food_of("bowl1") == "rice"
+    assert s.plate.find("some applesauce please") is None               # the bowl that wasn't chosen is unknown to it
+    sc = s.lib.items["scoop_bowl1"].poses
+    lx, ly, lz = K.fk(kin, min(sc, key=lambda q: K.fk(kin, q)[2]))
+    target = bowls[1][0]
+    assert math.dist((lx, ly), target) < 35                             # it dips into the bowl that was chosen
+    assert s.food_surface.est
+
+    r = c.post("/api/setup/bowls", json={"ids": [k["id"] for k in cands]})   # change of mind: both
+    assert [b["food"] for b in r.json()["bowls"]] == ["applesauce", "rice"]  # named left to right
+    assert s.lib.has("scoop_bowl2") and s.lib.has("lift_bowl2")
 
 
-
-def test_consensus_keeps_what_the_rotated_views_agree_on():
-    """Truth in a W x H photo; each view's answer is the truth rotated (plus a little noise); one view invents a
-    bowl. Mapped back, the real things agree, the phantom is dropped, a 2-of-4 bowl is 'unsure'."""
-    from spoonful.perception.photo_map import consensus
-    truth = {"base": (600, 420), "tip": (640, 640), "cup": (500, 760), "cup2": (760, 760), "maybe": (1100, 300)}
-
-    def rotate(x, y, rot):                     # original pixel -> pixel in the image rotated clockwise by rot
-        return {0: (x, y), 90: (H - y, x), 180: (W - x, H - y), 270: (y, W - x)}[rot]
-
-    answers = []
-    for i, rot in enumerate((0, 90, 180, 270)):
-        w, h = (W, H) if rot in (0, 180) else (H, W)
-        def n(pt, jitter=0):
-            x, y = rotate(pt[0] + jitter, pt[1] - jitter, rot)
-            return [y / h * 1000, x / w * 1000]
-        def box(pt, r=45):
-            (ya, xa), (yb, xb) = n((pt[0] - r, pt[1] - r)), n((pt[0] + r, pt[1] + r))
-            return [min(ya, yb), min(xa, xb), max(ya, yb), max(xa, xb)]
-        bowls = [{"box_2d": box(truth["cup"]), "food": ["jelly", "green jelly", "jelly", "gelatin"][i]},
-                 {"box_2d": box(truth["cup2"]), "food": "applesauce"}]
-        if i < 2:
-            bowls.append({"box_2d": box(truth["maybe"]), "food": "rice"})
-        if i == 3:
-            bowls.append({"box_2d": box((60, 300)), "food": "peanut butter"})
-        answers.append((rot, {"base": n(truth["base"], 3 * i), "tip": n(truth["tip"], i), "bowls": bowls}, w, h))
-    c = consensus(answers, W, H)
-    assert math.dist(c["base"]["px"], truth["base"]) < 8 and c["base"]["votes"] == 4
-    assert math.dist(c["tip"]["px"], truth["tip"]) < 4
-    foods = {b["food"]: b for b in c["bowls"]}
-    assert "peanut butter" not in foods                                  # seen once: dropped
-    assert foods["rice"]["sure"] is False and foods["rice"]["votes"] == 2
-    assert foods["jelly"]["sure"] and math.dist(foods["jelly"]["px"], truth["cup"]) < 2
-    assert foods["applesauce"]["votes"] == 4
+def test_outline_follows_the_bowl_not_the_box():
+    from spoonful.brain.photo_setup import outline
+    img = np.full((400, 600, 3), 235, np.uint8)
+    cv2.circle(img, (300, 200), 80, (60, 120, 200), -1)                 # a round bowl on a pale table
+    poly = np.array(outline(img, (210, 110, 390, 290)))
+    r = np.hypot(poly[:, 0] - 300, poly[:, 1] - 200)
+    assert len(poly) >= 6 and 70 < r.mean() < 92 and r.max() < 100      # hugs the circle, not the square box
+    flat = outline(np.full((400, 600, 3), 235, np.uint8), (210, 110, 390, 290))
+    assert len(flat) == 24                                               # nothing to separate: the box's ellipse

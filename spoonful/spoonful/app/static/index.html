@@ -78,7 +78,8 @@
 
       <li class="step" id="s-step-2">
         <div class="step-head"><h3>The table</h3><span class="chip" id="s-table-chip">Not mapped</span></div>
-        <p>Move the spoon into place, then scan the code and take one photo from straight above.</p>
+        <p>Move the spoon into place, then scan the code and take one photo from straight above. Then choose the
+          bowls you want.</p>
         <div class="phone-row">
           <img id="phone-qr" class="qr" alt="QR code that opens the photo page on your phone" width="150" height="150">
           <div class="phone-side">
@@ -87,8 +88,14 @@
             <p class="mono" id="phone-url"></p>
           </div>
         </div>
-        <img id="photo-img" class="photo hidden" alt="The table photo with the bowls marked">
+        <div class="photo-wrap hidden" id="photo-wrap">
+          <img id="photo-img" class="photo" alt="The table photo">
+          <svg id="photo-svg" aria-label="Bowls found in the photo. Select a bowl to add or remove it."></svg>
+        </div>
         <ul class="bowl-list" id="s-bowls"></ul>
+        <div class="row wrap hidden" id="s-use-row">
+          <button id="s-use" class="primary">Serve these bowls</button>
+        </div>
         <details>
           <summary>Use a photo file instead</summary>
           <div class="row wrap"><input type="file" id="photo-file" accept="image/*"><button id="photo-go">Map the table</button></div>

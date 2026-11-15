@@ -59,7 +59,7 @@ def test_phone_photo_shows_up_and_reports_what_to_fix(app_system):
     r = phone.post(f"/api/phone/photo/{link.token}", content=_jpeg(), headers={"content-type": "image/jpeg"})
     assert r.status_code == 200
     t0 = time.time()
-    while link.status == "mapping" and time.time() - t0 < 5:
+    while link.status == "finding" and time.time() - t0 < 5:
         time.sleep(0.05)
     assert link.count == 1 and link.status == "problem"          # the spoon wasn't posed: says so, moves nothing
     assert "Pose for photo" in link.message
