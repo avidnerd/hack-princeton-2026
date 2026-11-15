@@ -73,6 +73,20 @@ def build_scoop(kin, dip: dict) -> list[dict]:
     return [above, dict(dip), drag, tilt, up]
 
 
+DIP_ANGLE_DEG = 130          # spoon about 40 deg nose-down going into the food (a person's scooping angle)
+DIP_BELOW_SURFACE_MM = 12
+
+
+def build_scoop_at(kin, ref: dict, x: float, y: float, surface_mm: float) -> list[dict]:
+    """A scoop for a bowl seen at table position (x, y) whose food surface is predicted at surface_mm, without
+    anyone touching the spoon into it: the dip pose comes from inverse kinematics."""
+    p = dict(ref)
+    p["base"] = kin.zero_deg["base"] + math.degrees(math.atan2(y, x)) / kin.sign["base"]
+    z = max(10.0, surface_mm - DIP_BELOW_SURFACE_MM)
+    dip = _at(kin, p, math.hypot(x, y), z, DIP_ANGLE_DEG if _spoon_angle(kin, ref) >= 0 else -DIP_ANGLE_DEG)
+    return build_scoop(kin, dip)
+
+
 def build_pre(kin, mouth: dict) -> dict:
     r, z, _ = _rz(kin, mouth)
     for back in PRE_BACK_MM:

@@ -21,8 +21,8 @@ from typing import Callable, Optional
 from ..arm import kinematics as K
 from ..arm.arm import Arm, Motion, MotionDenied
 from ..arm.contact import Contact
-from ..arm.scoop_style import adapt_scoop, shift_scoop
-from ..arm.trajectory import Library, Pose, lerp_pose, plan
+from ..arm.scoop_style import adapt_scoop, shape_scoop, shift_scoop
+from ..arm.trajectory import Library, Pose, check_limits, lerp_pose, plan
 from ..config import ARM_JOINTS, Config, ScoopStyle
 from ..log import Log
 from ..perception.face import FaceState
@@ -94,6 +94,7 @@ class Bite:
     source: str
     bowl: Optional[str] = None
     texture: Optional[str] = None
+    attack: Optional[str] = None            # scoop strategy used (skim / dig / stab_and_saw / scrape / ladle)
     rescoops: int = 0
     spoon: Optional[dict] = None            # last spoon check answer
     spoon_pending_since: Optional[float] = None
@@ -151,7 +152,8 @@ class FSM:
         self._home_retry_at: Optional[float] = None
         self.plate = None                      # PlateWatcher (perception/plate.py), set by System
         self.last_bowl: Optional[str] = None
-        self.bite_queue: list[str] = []        # planner: "a little of each" -> one bowl per GO press   # GO / plain "bite" repeats the last food asked for
+        self.bite_queue: list[str] = []
+        self.food_surface = None               # photo_map.FoodSurface (System): predict -> feel -> update        # planner: "a little of each" -> one bowl per GO press   # GO / plain "bite" repeats the last food asked for
         self.on_summary: Optional[Callable[[int, str], None]] = None
         self.session_last_id: Optional[int] = None
         self._thread: Optional[threading.Thread] = None
@@ -627,7 +629,16 @@ class FSM:
         # How hard to dig depends on the food: same taught scoop, deeper / slower / with a saw for firm food.
         texture, why = self.plate.texture_of(self.bite.bowl)
         self.bite.texture = texture
-        style = self.cfg.plate.scoop_styles.get(texture)
+        attack = self.plate.attack_of(self.bite.bowl)
+        style = ScoopStyle(depth_mm=attack["depth_mm"], speed=attack["speed"], wiggle=attack["saw_strokes"],
+                           contact_extra_deg=attack["contact_extra_deg"])
+        self.bite.attack = attack["strategy"]
+        self.log.event("attack_plan", detail_bowl=self.bite.bowl, **{k: attack[k] for k in attack})
+        spoken = self.plate.bowls.get(self.bite.bowl, {})
+        if self.cfg.plate.explain_attack and attack.get("why") and not spoken.get("attack_explained"):
+            food = self.plate.food_of(self.bite.bowl) or "this"
+            self.speaker.say_text(f"{food.capitalize()}: {attack['why'].rstrip('.')}")
+            spoken["attack_explained"] = True
         base_poses = self.lib.items[scoop].poses
         shift = self.plate.shift_for(self.bite.bowl)
         if shift is not None and math.hypot(*shift) >= 5:
@@ -640,18 +651,24 @@ class FSM:
         else:
             shift = None
         probe = self.cfg.plate.probe.enabled
-        if not probe and shift is None and (style is None or (style.depth_mm <= 0 and style.wiggle <= 0
-                                                              and style.speed == 1.0 and style.contact_extra_deg <= 0)):
-            self._run_paths([(scoop, "normal")], name="scoop")          # soft food, bowl in place: the taught scoop
-            return
-        if style is None:
-            style = ScoopStyle()                                       # unknown texture: plain, just moved
+        shaped_poses, shaped = shape_scoop(self.cfg.kinematics, base_poses, attack["entry_angle_deg"], attack["drag_mm"],
+                                            self.cfg.arm.soft_limits_deg)
+        try:
+            for q in shaped_poses:
+                check_limits(self.cfg, q)
+            base_poses = shaped_poses
+            self.log.event("scoop_shape", detail_strategy=attack["strategy"], **shaped)
+        except Exception as e:                       # that angle isn't reachable here: keep the taught shape
+            self.log.event("scoop_shape_skipped", detail_strategy=attack["strategy"], why=str(e)[:120])
         depth = 0.0 if probe else style.depth_mm           # probing finds the depth itself
         poses, info = adapt_scoop(self.cfg.kinematics, base_poses, depth, style.wiggle)
         self.log.event("scoop_style", detail_texture=texture, why=why, food=self.plate.food_of(self.bite.bowl),
                        speed=style.speed, contact_extra_deg=style.contact_extra_deg, probe=probe, **info)
         if probe and self._start_probe_scoop(poses, style, texture):
             return
+        if probe:                                    # couldn't feel for the depth here: use the planned depth
+            poses, info = adapt_scoop(self.cfg.kinematics, base_poses, style.depth_mm, style.wiggle)
+            self.log.event("probe_unavailable", detail_depth_mm=style.depth_mm)
         try:
             p = plan(self.cfg, self.arm.current(), [(poses, "normal", scoop)], style.speed, f"scoop({texture})")
         except Exception as e:                       # a deeper pose outside the soft limits: use the taught one
@@ -672,23 +689,51 @@ class FSM:
             return False
         k = min(range(1, len(poses) - 1), key=lambda i: K.fk(kin, poses[i])[2])
         dip = poses[k]
+
+        def within(q):
+            try:
+                check_limits(self.cfg, q)
+                return True
+            except Exception:
+                return False
         hover = lower_tip(kin, dip, -pc.above_mm)
-        bottom = lower_tip(kin, dip, pc.below_mm)
-        if hover is None or bottom is None:
+        if hover is None or not within(hover):       # a steep spoon far out is at the edge of reach: hover less steep
+            from ..arm.scoop_style import _rz, _spoon_angle, solve_rz
+            r0, z0 = _rz(kin, dip)
+            sgn = 1.0 if _spoon_angle(kin, dip) >= 0 else -1.0
+            for t in (10, 20, 30, 40):
+                q = solve_rz(kin, dip, r0, z0 + pc.above_mm, iters=25, tilt_deg=-sgn * t)
+                if q is not None and within(q):
+                    hover = q
+                    break
+        bottom, below = None, 0.0
+        for frac in (1.0, 0.75, 0.5, 0.25):         # as deep as the joints allow at this spoon angle
+            q = lower_tip(kin, dip, pc.below_mm * frac)
+            if q is not None and within(q):
+                bottom, below = q, pc.below_mm * frac
+                break
+        if hover is None or bottom is None or not within(hover):
             return False
         try:
             approach = plan(self.cfg, self.arm.current(), [(list(poses[:k]) + [hover], "normal", "scoop_approach")],
-                            style.speed, "scoop_approach")
+                            1.0, "scoop_approach")     # the slow speed is for inside the food, not the trip there
             plan(self.cfg, hover, [([bottom], "normal", "probe")])        # limits check only
         except Exception as e:
             self.log.event("probe_skipped", detail_error=str(e)[:160])
             return False
-        T = (pc.above_mm + pc.below_mm) / max(1.0, pc.speed_mm_s)
+        T = (pc.above_mm + below) / max(1.0, pc.speed_mm_s)
         hover = {j: hover[j] for j in ARM_JOINTS}
         bottom = {j: bottom[j] for j in ARM_JOINTS}
         self._probe_job = {"poses": poses, "k": k, "dip_z": K.fk(kin, dip)[2], "style": style, "texture": texture,
                            "probe_plan": Plan([Segment([hover, bottom], "normal", T, "probe", linear=True)], "probe",
                                               probe_deg=pc.threshold_deg)}
+        if self.food_surface is not None and self.bite and self.bite.bowl:
+            amount = (self.plate.bowls.get(self.bite.bowl) or {}).get("amount") if self.plate else None
+            soft = texture in ("soft", "liquid")
+            pred = 8.0 if soft else self.food_surface.predict(self.bite.bowl, amount)   # soft: it'll meet the bottom
+            self._probe_job["predicted_mm"] = pred
+            self.log.event("surface_predict", detail_bowl=self.bite.bowl, predicted_mm=round(pred, 1),
+                           what="bowl bottom" if soft else "food surface")
         self.motion_step = 0
         self.motion = self.arm.run(approach)
         return True
@@ -707,7 +752,17 @@ class FSM:
             kin, pc = self.cfg.kinematics, self.cfg.plate.probe
             touched = self.motion.touched if self.motion else None
             rest = [dict(p) for p in job["poses"][job["k"]:]]
-            if touched and K.fk(kin, touched)[2] > job["dip_z"] - pc.backoff_mm:
+            if touched and self.food_surface is not None and self.bite and self.bite.bowl:
+                tzz = K.fk(kin, touched)[2]
+                if job["texture"] in ("soft", "liquid"):
+                    self.food_surface.history.setdefault(self.bite.bowl, []).append(
+                        {"predicted_mm": job.get("predicted_mm"), "felt_mm": round(tzz, 1),
+                         "error_mm": round(tzz - (job.get("predicted_mm") or tzz), 1), "what": "bottom"})
+                else:
+                    rec = self.food_surface.felt(self.bite.bowl, tzz)
+                    self.log.event("surface_update", detail_bowl=self.bite.bowl, **rec)
+            soft_food = job["texture"] in ("soft", "liquid")
+            if touched and soft_food and K.fk(kin, touched)[2] > job["dip_z"] - pc.backoff_mm:
                 # Resistance above the taught dip: the bowl bottom can't be there (the taught scoop went lower), so
                 # it is thick food or a false stall. Scoop at the taught depth rather than shallower.
                 self.log.event("scoop_probe", detail_touch_mm=round(K.fk(kin, touched)[2] - job["dip_z"], 1),
@@ -716,7 +771,8 @@ class FSM:
                 job["ignored_high_touch"] = True
             if touched:
                 tz = K.fk(kin, touched)[2]
-                dig = job["style"].depth_mm if job["texture"] in ("firm", "thick") else 0.0
+                dig = job["style"].depth_mm if (self.bite and self.bite.attack in ("stab_and_saw", "dig", "scrape")) \
+                    else 0.0                                   # skim / ladle stay near the surface
                 target = tz + pc.backoff_mm - dig
                 dz = job["dip_z"] - target                     # + = lower than taught
                 band = [i for i, p in enumerate(rest[:-1]) if K.fk(kin, p)[2] <= job["dip_z"] + 15]
@@ -731,8 +787,13 @@ class FSM:
             elif not job.get("ignored_high_touch"):
                 self.log.event("scoop_probe", detail_touch_mm=None, note="no resistance within the probe range")
             try:
-                p = plan(self.cfg, self.arm.current(), [(rest, "normal", "scoop_rest")], job["style"].speed,
-                         f"scoop({job['texture']})")
+                # slow (the strategy's speed) while the spoon is in the food; normal speed once it is lifting out
+                last_in = max([i for i, q in enumerate(rest[:-1]) if K.fk(kin, q)[2] <= job["dip_z"] + 15] or [0])
+                p = plan(self.cfg, self.arm.current(), [(rest[:last_in + 1], "normal", "scoop_rest")],
+                         job["style"].speed, f"scoop({job['texture']})")
+                if last_in + 1 < len(rest):
+                    out = plan(self.cfg, rest[last_in], [(rest[last_in + 1:], "normal", "scoop_out")], 1.0)
+                    p.segments.extend(out.segments)
             except Exception as e:
                 self.log.event("probe_rest_fallback", detail_error=str(e)[:160])
                 p = plan(self.cfg, self.arm.current(), [(job["poses"][job["k"]:], "normal", "scoop_rest")],

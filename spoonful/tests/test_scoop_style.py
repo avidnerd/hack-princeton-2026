@@ -82,8 +82,10 @@ def test_texture_precedence(sim_system):
     p.set_label("bowl2", "")
     p.manual.clear()
     p.vision_name = "gemini"
-    p.apply([{"bowl": "bowl2", "food": "mystery stew thing", "amount": "full", "texture": "thick"}])
-    assert p.texture_of("bowl2") == ("thick", "vision")         # vision beats the name table
+    p.apply([{"bowl": "bowl2", "food": "mystery dish", "amount": "full", "texture": "thick"}])
+    assert p.texture_of("bowl2") == ("thick", "vision")         # unknown food: vision's guess
+    p.apply([{"bowl": "bowl2", "food": "green jelly", "amount": "full", "texture": "soft"}])
+    assert p.texture_of("bowl2") == ("firm", "food name")       # known food: the name wins over vision
 
 
 # ---------------------------------------------------------------- end to end in the sim
@@ -94,33 +96,62 @@ def _bite(s, food_text):
     return s.fsm.motion
 
 
-def test_jello_digs_deeper_and_slower_than_applesauce(sim_system):
+def test_jello_is_stabbed_and_sawn_applesauce_is_skimmed(sim_system):
+    """Strategy by food: jelly -> stab_and_saw (steep entry, saw strokes, slower, more push allowed);
+    applesauce -> skim (shallow entry, no saw)."""
+    from spoonful.arm.scoop_style import _spoon_angle
     s = sim_system
     s.plate.set_label("bowl1", "applesauce")
     s.plate.set_label("bowl2", "jello")
-    ran = []
-    orig = s.fsm._run_paths
-    s.fsm._run_paths = lambda paths, speed_factor=1.0, name="": ran.append([p for p, _ in paths]) or \
-        orig(paths, speed_factor=speed_factor, name=name)
     orig_run = s.arm.run
     plans = []
     s.arm.run = lambda p: plans.append(p) or orig_run(p)
+    kin = s.cfg.kinematics
+
+    def dip_angle(p):
+        pts = [q for seg in p.segments if not seg.label.startswith("blend") for q in seg.path]
+        low = min(pts, key=lambda q: K.fk(kin, q)[2])
+        return abs(_spoon_angle(kin, low)) - 90               # degrees below horizontal at the bottom of the scoop
 
     _bite(s, "Spoonful, some jello please")
-    assert s.fsm.bite.texture == "firm"
+    assert s.fsm.bite.texture == "firm" and s.fsm.bite.attack == "stab_and_saw"
     firm = plans[-1]
-    assert firm.name == "scoop(firm)" and firm.contact_extra_deg == 4
+    assert firm.contact_extra_deg == 4
     s.log.flush()
-    ev = s.log.query("SELECT detail FROM events WHERE type='scoop_style' ORDER BY rowid")
-    assert ev and "firm" in ev[-1]["detail"]
+    ev = s.log.query("SELECT detail FROM events WHERE type='attack_plan' ORDER BY rowid")
+    assert ev and "stab_and_saw" in ev[-1]["detail"]
 
     s.fsm.post("stop", source="key"); wait_state(s, "STOPPED")
     s.fsm.post("stop", source="key"); s.fsm.post("reset"); wait_state(s, "IDLE")
     _bite(s, "Spoonful, applesauce")
-    assert s.fsm.bite.texture == "soft" and ran[-1] == ["scoop_bowl1"]   # taught scoop, untouched
+    assert s.fsm.bite.texture == "soft" and s.fsm.bite.attack == "skim"
     soft = plans[-1]
     assert soft.contact_extra_deg == 0
-    assert firm.duration > soft.duration                         # slower, deeper, plus the saw
+    assert firm.duration > soft.duration                         # slower, plus the saw strokes
+    assert dip_angle(firm) > dip_angle(soft) + 10                # steeper entry for jelly
+
+
+def test_attack_plans_are_clamped_and_low_bowls_are_scraped(fast_cfg):
+    from spoonful.arm.scoop_style import default_strategy, verify_strategy
+    v = verify_strategy({"strategy": "stab_and_saw", "entry_angle_deg": 95, "depth_mm": 40, "saw_strokes": 9, "speed": 3})
+    assert v["entry_angle_deg"] == 70 and v["depth_mm"] == 15 and v["saw_strokes"] == 3 and v["speed"] == 1.0
+    assert verify_strategy({"strategy": "fling"}, "firm")["strategy"] == "stab_and_saw"      # unknown -> rules
+    assert verify_strategy(None, "liquid")["strategy"] == "ladle"
+    assert default_strategy("soft", "low")["strategy"] == "scrape"
+
+
+def test_vision_plans_the_attack_from_a_close_up(sim_system):
+    s = sim_system
+    s.plate.set_label("bowl2", "jello")
+    seen = []
+    s.plate.image_generate = lambda jpg, prompt: seen.append(prompt) or {
+        "strategy": "stab_and_saw", "entry_angle_deg": 62, "depth_mm": 9, "saw_strokes": 2, "speed": 0.5,
+        "why": "firm cubes need cutting"}
+    a = s.plate.plan_attack("bowl2", b"jpeg-bytes")
+    assert a["source"] == "vision" and a["entry_angle_deg"] == 62 and "jello" in seen[0]
+    assert s.plate.attack_of("bowl2")["why"] == "firm cubes need cutting"
+    s.plate.bowls["bowl2"]["amount"] = "low"                     # later the camera sees little left
+    assert s.plate.attack_of("bowl2")["strategy"] == "scrape"
 
 
 def test_per_joint_contact_allowance_for_sagging_joints(fast_cfg):

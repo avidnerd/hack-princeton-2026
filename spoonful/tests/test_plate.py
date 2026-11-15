@@ -95,14 +95,16 @@ def plate_system(sim_system):
     s = sim_system
     s.plate.set_label("bowl1", "applesauce")
     s.plate.set_label("bowl2", "yogurt")
-    ran = []
-    orig = s.fsm._run_paths
+    ran = []                                   # the moves each plan sent to the arm was made of (by name)
+    orig = s.arm.run
 
-    def spy(paths, name):
-        ran.append([p for p, _ in paths])
-        return orig(paths, name=name)
+    def spy(p):
+        names = [seg.label for seg in p.segments if not seg.label.startswith("blend->")]
+        if names and names[0] != "noop":
+            ran.append(names)
+        return orig(p)
 
-    s.fsm._run_paths = spy
+    s.arm.run = spy
     return s, ran
 
 
@@ -238,3 +240,14 @@ def test_select_unknown_food_says_so(plate_system):
     s.on_voice(None, "Spoonful, switch to the carrots", 0.9)
     time.sleep(0.3)
     assert any("I don't see that" in d for d in _speech(s)) and ran == []
+
+
+def test_unwatched_bowls_are_never_judged_from_the_webcam(fast_cfg):
+    """A bowl set up from an overhead photo (watch=False) isn't in the webcam's view: the periodic check must not
+    look for it there (it would see no food and call the bowl finished)."""
+    for b in fast_cfg.plate.bowls:
+        b.watch, b.label = False, "jelly"
+    w, calls = _watcher(fast_cfg, [[{"bowl": "bowl1", "food": None, "amount": "empty"}]] * 5)
+    for _ in range(4):
+        assert not w.check_now()
+    assert calls == [] and w.error is None and not w.is_empty("bowl1") and w.food_of("bowl1") == "jelly"

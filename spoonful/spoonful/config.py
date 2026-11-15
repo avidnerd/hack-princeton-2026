@@ -224,6 +224,9 @@ class BowlCfg(_M):
     roi: tuple[int, int, int, int]             # x, y, w, h of the bowl in the plate camera image, 1280x720 coords
     scoop: str = ""
     label: str = ""                            # food name to assume when vision is off ("" = unknown)
+    watch: bool = True                         # False: the plate camera can't see this bowl (set up from a photo):
+                                               # never judge it empty from the webcam
+    attack: dict = {}                          # how to scoop it (strategy chosen by vision at setup; see scoop_style)
 
 
 class ScoopStyle(_M):
@@ -279,6 +282,7 @@ class PlateCfg(_M):
     spoon_check: SpoonCheckCfg = SpoonCheckCfg()
     scoop_styles: dict[str, ScoopStyle] = {k: ScoopStyle(**v) for k, v in DEFAULT_SCOOP_STYLES.items()}
     default_texture: str = "soft"              # when neither vision nor the food name says
+    explain_attack: bool = True                # say why, on the first bite from each bowl ("Jelly is firm: I'll cut in")
     empty_confirm: int = 2                     # consecutive "empty" answers before a bowl counts as finished
     bowls: list[BowlCfg] = []
 

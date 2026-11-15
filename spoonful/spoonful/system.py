@@ -87,6 +87,9 @@ class System:
         self.fsm.plate = self.plate
         from .brain.planner import Planner
         self.planner = Planner(None, self.log)
+        from .perception.photo_map import FoodSurface
+        self.food_surface = FoodSurface()
+        self.fsm.food_surface = self.food_surface
 
         def anchor(bowl: str):
             from .arm.scoop_style import scoop_anchor

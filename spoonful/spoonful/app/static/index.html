@@ -75,6 +75,15 @@
       <button id="setup-build" class="primary">Build moves</button><button id="setup-clear">Start over</button>
     </div>
     <div id="setup-out" class="note"></div>
+    <h3>Photo setup (no touching the bowls)</h3>
+    <p class="note">Mouth set first (Quick setup). Clear the space in front of the arm and press <b>Pose for photo</b>:
+      the spoon tip goes to a known spot. Take ONE photo from straight above with your phone, showing the arm's base,
+      the spoon and all the bowls. Choose it below and press <b>Map the table</b>: the robot finds every bowl and builds
+      a scoop for each, by itself.</p>
+    <div class="row wrap"><button id="photo-pose">Pose for photo</button>
+      <input type="file" id="photo-file" accept="image/*"><button id="photo-go" class="primary">Map the table</button></div>
+    <div id="photo-out" class="note"></div>
+    <img id="photo-img" alt="map of the table" style="max-width:100%;display:none">
     <h3>Record by hand</h3>
     <p class="note">Only in IDLE. Torque turns off on the arm joints while recording: support the arm.</p>
     <div class="row wrap">

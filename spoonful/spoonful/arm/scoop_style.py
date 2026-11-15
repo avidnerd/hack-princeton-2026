@@ -167,3 +167,93 @@ def adapt_scoop(kin: KinCfg, poses: list[Mapping[str, float]], depth_mm: float =
         out[deepest + 1:deepest + 1] = saw + [dict(base)]
         info["wiggle"] = int(wiggle)
     return out, info
+
+
+# ---------------------------------------------------------------- attack strategies (how to go into a food)
+# A person doesn't scoop jelly like applesauce: they stab steeply and cut jelly, skim applesauce, dig into rice,
+# scrape when little is left, keep a spoon of soup level. A vision model picks the strategy from a close-up of the
+# bowl (perception/plate.py ATTACK_PROMPT); these are the defaults and the safe ranges every choice is clamped to.
+
+STRATEGIES = {
+    "skim":         {"entry_angle_deg": 25, "depth_mm": 5,  "saw_strokes": 0, "speed": 0.8, "drag_mm": 30, "contact_extra_deg": 0},
+    "dig":          {"entry_angle_deg": 45, "depth_mm": 10, "saw_strokes": 0, "speed": 0.7, "drag_mm": 25, "contact_extra_deg": 2},
+    "stab_and_saw": {"entry_angle_deg": 60, "depth_mm": 10, "saw_strokes": 2, "speed": 0.5, "drag_mm": 15, "contact_extra_deg": 4},
+    "scrape":       {"entry_angle_deg": 50, "depth_mm": 12, "saw_strokes": 0, "speed": 0.6, "drag_mm": 35, "contact_extra_deg": 2},
+    "ladle":        {"entry_angle_deg": 20, "depth_mm": 8,  "saw_strokes": 0, "speed": 0.5, "drag_mm": 10, "contact_extra_deg": 0},
+}
+RULE_WHY = {"skim": "it's soft, so I'll skim the top", "dig": "it's thick, so I'll dig in at an angle",
+            "stab_and_saw": "it's firm, so I'll cut in steeply", "scrape": "there's little left, so I'll scrape the bottom",
+            "ladle": "it's liquid, so I'll keep the spoon level"}
+TEXTURE_STRATEGY = {"soft": "skim", "thick": "dig", "firm": "stab_and_saw", "liquid": "ladle"}
+LIMITS = {"entry_angle_deg": (20, 70), "depth_mm": (0, MAX_DEPTH_MM), "saw_strokes": (0, 3), "speed": (0.4, 1.0),
+          "drag_mm": (5, 40), "contact_extra_deg": (0, MAX_CONTACT_EXTRA_DEG)}
+
+
+def default_strategy(texture: Optional[str], amount: Optional[str] = None) -> dict:
+    name = "scrape" if amount == "low" and texture != "liquid" else TEXTURE_STRATEGY.get(texture or "soft", "skim")
+    return {"strategy": name, **STRATEGIES[name], "why": RULE_WHY[name], "source": "rules"}
+
+
+def verify_strategy(d: object, texture: Optional[str] = None, amount: Optional[str] = None) -> dict:
+    """Pure. A model's attack plan -> a safe one: known strategy, every number clamped to LIMITS, missing numbers from
+    the strategy's defaults. Anything unusable -> the rule-based default for the texture."""
+    if not isinstance(d, dict) or d.get("strategy") not in STRATEGIES:
+        return default_strategy(texture, amount)
+    out = {"strategy": d["strategy"], "why": str(d.get("why") or "")[:120], "source": "vision"}
+    base = STRATEGIES[d["strategy"]]
+    for k, (lo, hi) in LIMITS.items():
+        try:
+            v = float(d.get(k, base[k]))
+        except (TypeError, ValueError):
+            v = base[k]
+        out[k] = max(lo, min(hi, v))
+    out["saw_strokes"] = int(round(out["saw_strokes"]))
+    return out
+
+
+def shape_scoop(kin: KinCfg, poses: list[Mapping[str, float]], entry_angle_deg: float,
+                drag_mm: float = 25.0, limits: Optional[dict] = None) -> tuple[list[dict], dict]:
+    """Pure. Re-angle the in-food part of a scoop so the spoon enters at entry_angle_deg below horizontal, and make the
+    drag along the food drag_mm long (moving toward the arm). Points that can't be reached keep their taught shape."""
+    out = [dict(p) for p in poses]
+    info = {"entry_angle_deg": entry_angle_deg, "reangled": 0, "drag_mm": 0.0}
+    if len(out) < 3:
+        return out, info
+    zs = [K.fk(kin, p)[2] for p in out]
+    inner = range(1, len(out) - 1)
+    z_min = min(zs[i] for i in inner)
+    k = min(inner, key=lambda i: zs[i])
+    sign = 1.0 if _spoon_angle(kin, out[k]) >= 0 else -1.0
+    target = sign * (90.0 + entry_angle_deg)            # angle from straight up: 90 = level, 180 = straight down
+    band = [i for i in inner if zs[i] <= z_min + IN_FOOD_BAND_MM]
+    # the points just above the bowl on the way in get the entry angle too, so the spoon arrives already tilted
+    # (otherwise it swings ~90 deg of joint travel right over the food)
+    xk, yk, _ = K.fk(kin, out[k])
+    above = [i for i in range(0, k) if i not in band and math.hypot(K.fk(kin, out[i])[0] - xk, K.fk(kin, out[i])[1] - yk) < 40]
+    for i in above + band:
+        r, z = _rz(kin, out[i])
+        want = target - _spoon_angle(kin, out[i])
+        for frac in (1.0, 0.85, 0.7, 0.55, 0.4, 0.25):          # as close to the planned angle as the arm can get
+            q = solve_rz(kin, out[i], r, z, iters=25, tilt_deg=want * frac)
+            if q is not None and (limits is None or all(limits[j][0] <= q[j] <= limits[j][1] for j in limits if j in q)):
+                out[i] = q
+                info["reangled"] += 1
+                break
+    # drag: after the dip, the in-food points move this far toward the arm (radially), keeping their height
+    after = [i for i in band if i > k]
+    r_dip, z_dip = _rz(kin, out[k])
+    if after:
+        r_end, _ = _rz(kin, out[after[-1]])
+        extra = drag_mm - max(0.0, r_dip - r_end)
+        for i in after:
+            r, z = _rz(kin, out[i])
+            q = solve_rz(kin, out[i], r - extra, z, iters=25)
+            if q is not None and (limits is None or all(limits[j][0] <= q[j] <= limits[j][1] for j in limits if j in q)):
+                out[i] = q
+        info["drag_mm"] = round(drag_mm, 1)
+    else:
+        q = solve_rz(kin, out[k], r_dip - drag_mm, z_dip, iters=25)
+        if q is not None:
+            out.insert(k + 1, q)
+            info["drag_mm"] = round(drag_mm, 1)
+    return out, info

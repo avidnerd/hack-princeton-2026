@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from ..arm.scoop_style import TEXTURES, texture_from_name
+from ..arm.scoop_style import TEXTURES, default_strategy, texture_from_name, verify_strategy
 from .table import TableCalib
 from ..config import Config
 
@@ -40,6 +40,14 @@ BOWL_TOUCH_PROMPT = (
     "container (the one the spoon is in) and the food in it. Answer only JSON {\"box_2d\": [ymin, xmin, ymax, xmax] "
     "normalised to 0-1000, \"food\": 1-3 lowercase words or null}, or {\"box_2d\": null} if you can't see it."
 )
+ATTACK_PROMPT = """You are deciding how a robot should scoop the food in this bowl with a spoon. Food: {food}. Amount left: {amount}.
+Pick ONE strategy:
+ "skim": shallow pass near the surface (soft, spreadable: applesauce, yogurt, pudding)
+ "dig": angled entry then lift (thick or granular: rice, mashed potatoes, oatmeal)
+ "stab_and_saw": steep entry, saw side to side to cut, then lift (firm or gel pieces: jelly, tofu, fruit chunks)
+ "scrape": go to the bottom and drag up the wall (when there is little left)
+ "ladle": keep the spoon level and lift slowly (liquid: soup, broth)
+Answer only JSON: {{"strategy": ..., "entry_angle_deg": 20-70 (spoon angle below horizontal entering), "depth_mm": 0-15 (how far below the food surface), "saw_strokes": 0-3, "speed": 0.4-1.0, "drag_mm": 5-40, "why": "under 12 words, what you see that decides it"}}"""
 TIP_PROMPT = (
     "A white plastic spoon is taped to the gripper of a small teal robot arm. Point to the very tip of that spoon: "
     "the end of the spoon's bowl farthest from the gripper. Only if you can clearly see that spoon tip, answer "
@@ -146,6 +154,7 @@ class PlateWatcher:
         self._point: Optional[Callable] = point_fn
         self._bowl_touch: Optional[Callable] = None
         self.text_generate: Optional[Callable[[str], object]] = None    # Gemini, text in -> JSON out (planner)
+        self.image_generate: Optional[Callable[[bytes, str], object]] = None
         self.spoon_frame_fn: Callable[[], Optional[object]] = frame_fn   # System: the face camera (sees the spoon)
         self.manual: dict[str, str] = {}
         self.error: Optional[str] = None
@@ -166,6 +175,8 @@ class PlateWatcher:
                 self._vision = lambda crops: self._gemini(client, crops)
                 self._locate = self._locate or (lambda jpg: self._gemini_locate(client, jpg))
                 self.text_generate = lambda prompt: self._generate(client, [prompt])
+                self.image_generate = lambda jpg, prompt: self._generate(client, [
+                    types.Part.from_bytes(data=jpg, mime_type="image/jpeg"), prompt])
                 self._bowl_touch = lambda jpg: self._generate(client, [
                     types.Part.from_bytes(data=jpg, mime_type="image/jpeg"), BOWL_TOUCH_PROMPT])
                 self._point = self._point or (lambda jpg: self._generate(client, [
@@ -207,6 +218,8 @@ class PlateWatcher:
         sx, sy = w / 1280.0, h / 720.0          # rois are in 1280x720 reference coords, like the rest of config
         out = []
         for b in self.cfg.plate.bowls:
+            if not b.watch:
+                continue
             x, y, bw, bh = b.roi
             st = self.bowls.get(b.name) or {}
             if st.get("pos_px") and st.get("pos_ts") and time.time() - st["pos_ts"] < self.cfg.plate.track.max_age_s:
@@ -392,7 +405,8 @@ class PlateWatcher:
                 return False
             crops = self.crops(img)
             if not crops:
-                self.error = "bowl boxes are outside the image"
+                if any(b.watch for b in self.cfg.plate.bowls):
+                    self.error = "bowl boxes are outside the image"
                 return False
             self.apply(self._vision(crops))
             self.locate(img)
@@ -466,16 +480,54 @@ class PlateWatcher:
         return self.bowls[bowl]["food"] if bowl in self.bowls else None
 
     def texture_of(self, bowl: str) -> tuple[str, str]:
-        """(texture, why). Operator choice, then what vision saw, then the food's name, then the default."""
+        """(texture, why). Operator choice, then the food's name if it's a known food, then what vision guessed,
+        then the default. Vision names food well but judges texture poorly from above (it called applesauce
+        "thick" and jelly "soft", 2026-11-14), so a known name wins."""
         if bowl in self.manual_texture:
             return self.manual_texture[bowl], "operator"
         b = self.bowls.get(bowl) or {}
-        if b.get("vision_texture") and b.get("source") == self.vision_name:
-            return b["vision_texture"], "vision"
         t = texture_from_name(b.get("food"))
         if t:
             return t, "food name"
+        if b.get("vision_texture"):
+            return b["vision_texture"], "vision"
         return self.cfg.plate.default_texture, "default"
+
+    def plan_attack(self, bowl: str, crop_jpg: Optional[bytes] = None) -> dict:
+        """How to scoop this bowl: a vision model looks at a close-up of it (crop_jpg, or the bowl's box in the plate
+        camera) and picks a strategy; the plan is clamped to safe limits (verify_strategy). Falls back to rules."""
+        b = self.bowls.get(bowl) or {}
+        texture, _ = self.texture_of(bowl)
+        plan = None
+        if self.image_generate is not None:
+            try:
+                if crop_jpg is None:
+                    import cv2
+                    img = self.frame_fn()
+                    crop = dict(self.crops(img)).get(bowl) if img is not None else None
+                    if crop is not None:
+                        im = cv2.imdecode(__import__("numpy").frombuffer(crop, "uint8"), cv2.IMREAD_COLOR)
+                        im = cv2.resize(im, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+                        crop_jpg = cv2.imencode(".jpg", im, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
+                if crop_jpg is not None:
+                    plan = self.image_generate(crop_jpg, ATTACK_PROMPT.format(food=b.get("food") or "unknown food",
+                                                                            amount=b.get("amount") or "unknown"))
+            except Exception as e:
+                self.error = f"attack plan: {e!r}"[:300]
+        a = verify_strategy(plan, texture, b.get("amount"))
+        b["attack"] = a
+        return a
+
+    def attack_of(self, bowl: str) -> dict:
+        """The strategy to use now: the vision plan (or the configured one), switched to "scrape" when vision sees
+        there's little left (the camera's latest amount overrides the plan made when the bowl was full)."""
+        b = self.bowls.get(bowl) or {}
+        cfg_attack = next((x.attack for x in self.cfg.plate.bowls if x.name == bowl and x.attack), None)
+        a = b.get("attack") or (verify_strategy(cfg_attack) if cfg_attack else None) \
+            or default_strategy(self.texture_of(bowl)[0], b.get("amount"))
+        if b.get("amount") == "low" and a["strategy"] not in ("scrape", "ladle"):
+            a = default_strategy(self.texture_of(bowl)[0], "low")
+        return a
 
     def scoop_for(self, bowl: str) -> str:
         b = next(b for b in self.cfg.plate.bowls if b.name == bowl)
@@ -493,5 +545,7 @@ class PlateWatcher:
                 "checks": self.checks, "last_check_age_s": round(time.time() - self.last_check, 1) if self.last_check else None,
                 "bowls": [{"name": k, "food": v["food"], "amount": v["amount"], "source": v["source"],
                            "empty": self.is_empty(k), "scoop": self.scoop_for(k), "texture": self.texture_of(k)[0],
-                           "texture_why": self.texture_of(k)[1]} for k, v in self.bowls.items()],
+                           "texture_why": self.texture_of(k)[1],
+                           "attack": {kk: vv for kk, vv in self.attack_of(k).items() if kk in ("strategy", "why", "source")}}
+                          for k, v in self.bowls.items()],
                 "summary": self.describe()}

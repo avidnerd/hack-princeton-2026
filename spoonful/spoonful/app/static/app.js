@@ -165,6 +165,21 @@ $("setup-mouth").onclick = () => post("setup/mouth").then((r) => { if (r.ok) set
 $("setup-build").onclick = () => post("setup/build").then((r) => {
   if (r.ok) { setupLog(`Built: ${r.moves.join(", ")}. Bowls: ${r.bowls.join(", ")}. Try a bite!`); loadTraj(); }
 });
+$("photo-pose").onclick = () => post("photo/pose").then((r) => { if (r.ok) $("photo-out").textContent = "Spoon in place. Take the photo from straight above."; });
+$("photo-go").onclick = () => {
+  const f = $("photo-file").files[0];
+  if (!f) { toast("choose the photo first"); return; }
+  $("photo-out").textContent = "Reading the photo...";
+  const rd = new FileReader();
+  rd.onload = () => post("photo/upload", { image: rd.result }).then((r) => {
+    if (r.ok) {
+      $("photo-out").textContent = r.report.join(" | ");
+      $("photo-img").src = "/api/photo/annotated?t=" + Date.now(); $("photo-img").style.display = "block";
+      loadTraj();
+    } else $("photo-out").textContent = "";
+  });
+  rd.readAsDataURL(f);
+};
 $("setup-clear").onclick = () => post("setup/clear").then(() => setupLog("Cleared."));
 $("teach-start").onclick = () => post("teach/start", { name: $("teach-name").value, kind: "path" });
 $("teach-stop").onclick = () => post("teach/stop").then((r) => { if (r.ok) { $("plan").textContent = `saved ${r.name}: ${r.waypoints} waypoints`; loadTraj(); } });
