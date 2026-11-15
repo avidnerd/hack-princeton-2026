@@ -78,6 +78,8 @@ class System:
         if opts.voice is not None:
             cfg.voice.enabled = opts.voice
         self.voice = VoiceListener(cfg, self.on_voice, self.log)
+        self.voice.on_unaddressed = self.on_unaddressed_voice
+        self.voice.hint_fn = self.voice_hint
         self.plate_camera = None
         if cfg.plate.enabled and cfg.plate.camera_index >= 0 and opts.camera:
             self.plate_camera = Camera(cfg.camera.model_copy(update={"index": cfg.plate.camera_index}))
@@ -143,6 +145,20 @@ class System:
                 return
         if cmd:
             self.fsm.post(cmd, source="voice")
+
+    def voice_hint(self) -> str:
+        """A sentence with the words the recogniser should expect: the wake word and the foods on the table."""
+        foods = [f for f in self.plate.labels().values() if f]
+        return " ".join(f"Spoonful, give me the {f}." for f in foods) or "Spoonful, give me a bite."
+
+    def on_unaddressed_voice(self, text: str, conf: float) -> None:
+        """Said without "Spoonful" (or the word was cut off). Picking a food is harmless, since nothing moves until
+        GO, so a clear food name still counts. Everything else is ignored."""
+        if self.cfg.voice.requests or not self.cfg.voice.select or not self.plate.enabled:
+            return
+        bowl = self.plate.find(text)
+        if bowl:
+            self.fsm.post("select", source="voice", bowl=bowl)
 
     def planner_scene(self) -> list[dict]:
         out = []

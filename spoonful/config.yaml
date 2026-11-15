@@ -116,9 +116,9 @@ face:
   jaw_open_threshold: 0.25
   hysteresis_fraction: 0.7
   yaw_max_deg: 22.0
-  yaw_center_deg: -25.7
+  yaw_center_deg: -27.3
   pitch_max_deg: 20.0
-  pitch_offset_deg: 14.6
+  pitch_offset_deg: 22.8
   presence_hold_s: 0.5
   mouth_open_hold_s: 0.3
   mouth_closed_taken_s: 0.5
@@ -306,12 +306,12 @@ plate:
     watch: false
     attack:
       strategy: skim
-      why: Applesauce is soft and spreadable, ideal for a shallow skimming motion.
+      why: Applesauce is soft and spreadable, ideal for a shallow surface skim.
       source: vision
       entry_angle_deg: 25.0
       depth_mm: 5.0
       saw_strokes: 0
-      speed: 0.8
+      speed: 0.6
       drag_mm: 20.0
       contact_extra_deg: 0
   - name: bowl2
@@ -330,7 +330,7 @@ plate:
       entry_angle_deg: 45.0
       depth_mm: 10.0
       saw_strokes: 2
-      speed: 0.6
+      speed: 0.5
       drag_mm: 15.0
       contact_extra_deg: 4.0
 app:

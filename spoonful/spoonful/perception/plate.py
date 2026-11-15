@@ -11,6 +11,7 @@ timeout; the one that last worked is tried first. Verified against google-genai 
 """
 from __future__ import annotations
 
+import difflib
 import json
 import math
 import os
@@ -103,9 +104,16 @@ def match_food(text: str, labels: dict[str, Optional[str]]) -> Optional[str]:
         if f_sq and f_sq in t_sq:
             best.append((100 + len(f_sq), bowl))
             continue
-        hits = [w for w in (singular(x) for x in words(food)) if len(w) >= 4 and w in t_words]
+        f_words = [w for w in (singular(x) for x in words(food)) if len(w) >= 4]
+        hits = [w for w in f_words if w in t_words]
         if hits:
             best.append((max(len(w) for w in hits), bowl))
+            continue
+        # speech recognition clips and respells: "apples" for applesauce, "jello" for jelly, "yoghurt" for yogurt
+        near = [w for w in t_words if len(w) >= 4 and (
+            f_sq.startswith(w) or any(difflib.SequenceMatcher(None, w, fw).ratio() >= 0.8 for fw in f_words))]
+        if near:
+            best.append((max(len(w) for w in near) - 0.5, bowl))
     if not best:
         return None
     best.sort(reverse=True)

@@ -16,7 +16,9 @@ LABELS = {"bowl1": "applesauce", "bowl2": "mashed potatoes", "bowl3": "yogurt"}
     ("spoonful apple sauce", "bowl1"),
     ("can I have some potatoes", "bowl2"),
     ("Spoonful, mashed potatoes!", "bowl2"),
-    ("some yoghurt", None),          # not the same word: no guess
+    ("some yoghurt", "bowl3"),       # a respelling still counts
+    ("Give me the apples.", "bowl1"),  # what the recogniser made of "applesauce"
+    ("could I get some jello", None),  # nothing like it on this table
     ("Spoonful, yogurt", "bowl3"),
     ("the carrots please", None),
     ("", None),
@@ -251,3 +253,18 @@ def test_unwatched_bowls_are_never_judged_from_the_webcam(fast_cfg):
     for _ in range(4):
         assert not w.check_now()
     assert calls == [] and w.error is None and not w.is_empty("bowl1") and w.food_of("bowl1") == "jelly"
+
+
+
+def test_food_named_without_the_wake_word_is_still_picked(plate_system):
+    # The recogniser sometimes loses "Spoonful". A food name alone picks the food (nothing moves until GO).
+    s, ran = plate_system
+    s.cfg.voice.requests, s.cfg.voice.select = False, True
+    start_listening(s)
+    s.on_unaddressed_voice(" Give me the apples.", 0.5)
+    time.sleep(0.3)
+    assert s.fsm.last_bowl == "bowl1" and s.fsm.state.value == "LISTENING" and ran == []
+    s.on_unaddressed_voice("so anyway I was telling him about the game", 0.9)   # ordinary talk: ignored
+    time.sleep(0.2)
+    assert s.fsm.last_bowl == "bowl1"
+    assert "applesauce" in s.voice_hint() and "Spoonful" in s.voice_hint()

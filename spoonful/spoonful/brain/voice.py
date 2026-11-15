@@ -8,6 +8,7 @@ Unknown or low-confidence -> ignored silently. "stop" is latched like the button
 from __future__ import annotations
 
 import io
+import collections
 import math
 import os
 import queue
@@ -57,6 +58,9 @@ def parse_command(text: str, cfg: VoiceCfg, require_wake: bool = True) -> Option
     return best[1] if best else None
 
 
+PRE_ROLL_BLOCKS = 10        # 0.5 s of audio kept from before speech got loud
+
+
 def heard_wake(text: str, cfg: VoiceCfg) -> bool:
     t = normalise(text)
     return any(alias in t for alias in cfg.wake_aliases)
@@ -88,10 +92,12 @@ class Transcriber:
             WhisperModel = _import_whisper()
             self.model = WhisperModel(cfg.model, device="cpu", compute_type="int8")
 
-    def __call__(self, audio: np.ndarray) -> tuple[str, float]:
+    def __call__(self, audio: np.ndarray, hint: str = "") -> tuple[str, float]:
+        """hint: a sentence using the words to expect ("Spoonful, give me the applesauce."); it biases the
+        recogniser toward them, so "applesauce" isn't heard as "apples"."""
         if self.cfg.backend == "faster_whisper":
             segs, _ = self.model.transcribe(audio, language="en", beam_size=1, vad_filter=False,
-                                            condition_on_previous_text=False)
+                                            condition_on_previous_text=False, initial_prompt=hint or None)
             segs = list(segs)
             if not segs:
                 return "", 0.0
@@ -120,6 +126,8 @@ class VoiceListener:
     def __init__(self, cfg: Config, on_command: Callable[[str, str, float], None], log=None):
         self.cfg = cfg
         self.on_command = on_command
+        self.on_unaddressed: Callable[[str, float], None] = lambda text, conf: None
+        self.hint_fn: Callable[[], str] = lambda: ""
         self.log = log
         self.enabled = cfg.voice.enabled
         self.error: Optional[str] = None
@@ -152,6 +160,7 @@ class VoiceListener:
         v = self.cfg.voice
         block = int(v.sample_rate * 0.05)
         buf: list[np.ndarray] = []
+        lead: collections.deque = collections.deque(maxlen=PRE_ROLL_BLOCKS)
         speaking, silence, ptt_seen = False, 0.0, False
         try:
             with sd.InputStream(samplerate=v.sample_rate, channels=1, dtype="float32", blocksize=block) as st:
@@ -168,6 +177,9 @@ class VoiceListener:
                         buf, ptt_seen, speaking = [], False, False
                         continue
                     if loud:
+                        if not speaking:
+                            buf.extend(lead)
+                            lead.clear()
                         speaking, silence = True, 0.0
                         buf.append(x)
                     elif speaking:
@@ -176,6 +188,8 @@ class VoiceListener:
                         if silence >= 0.6:
                             self._emit(buf, False)
                             buf, speaking = [], False
+                    else:
+                        lead.append(x)
                     if len(buf) * 0.05 > 4.0:
                         self._emit(buf, False)
                         buf, speaking = [], False
@@ -197,7 +211,7 @@ class VoiceListener:
             except queue.Empty:
                 continue
             try:
-                text, conf = self.transcriber(audio)
+                text, conf = self.transcriber(audio, self.hint_fn())
             except Exception as e:
                 self.error = f"asr error: {e!r}"
                 continue
@@ -211,6 +225,8 @@ class VoiceListener:
                 self.on_command(cmd, text, conf)
             elif conf >= self.cfg.voice.min_confidence and (ptt or heard_wake(text, self.cfg.voice)):
                 self.on_command(None, text, conf)   # e.g. "Spoonful, applesauce please": the system decides
+            elif conf >= self.cfg.voice.min_confidence and text.strip():
+                self.on_unaddressed(text, conf)     # no wake word: may only pick a food, never move the arm
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "error": self.error, "ptt": self.ptt, "last_text": self.last_text}
