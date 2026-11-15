@@ -52,6 +52,7 @@
     <video id="video" playsinline muted></video>
     <p class="status" id="live-status" role="status"></p>
     <button id="live">Start live camera</button>
+    <button id="flip" class="quiet" hidden>Use the back camera</button>
   </section>
 </main>
 <script>
@@ -100,6 +101,7 @@ el("file").onchange = async (e) => {
 
 // ---- live camera
 let stream = null, wake = null, sent = 0, failed = 0;
+let facing = "user";        // the front camera: the phone can stand with its screen toward you
 async function loop() {
   const v = el("video");
   let t0 = performance.now(), n0 = 0;
@@ -123,7 +125,7 @@ async function start() {
     return;
   }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1280 } }, audio: false });
   } catch (err) {
     say("live-status", "Camera access was refused. Allow the camera for this page and try again.", "bad");
     return;
@@ -134,6 +136,8 @@ async function start() {
   try { wake = await navigator.wakeLock.request("screen"); } catch (err) { /* older phones: turn off auto-lock by hand */ }
   el("live").textContent = "Stop live camera";
   el("live").classList.add("quiet");
+  el("flip").hidden = false;
+  el("flip").textContent = facing === "user" ? "Use the back camera" : "Use the front camera";
   say("live-status", wake ? "Starting" : "Starting. Keep this screen on (turn off auto-lock).");
   loop();
 }
@@ -144,9 +148,15 @@ function stop() {
   el("video").style.display = "none";
   el("live").textContent = "Start live camera";
   el("live").classList.remove("quiet");
+  el("flip").hidden = true;
   say("live-status", "");
 }
 el("live").onclick = () => (stream ? stop() : start());
+el("flip").onclick = async () => {
+  facing = facing === "user" ? "environment" : "user";
+  stop();
+  await start();
+};
 document.addEventListener("visibilitychange", async () => {     // the wake lock is dropped when the page is hidden
   if (stream && document.visibilityState === "visible") { try { wake = await navigator.wakeLock.request("screen"); } catch (err) { /* ignore */ } }
 });
