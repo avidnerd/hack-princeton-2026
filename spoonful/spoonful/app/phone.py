@@ -268,6 +268,12 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
         img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             raise HTTPException(400, "Not a picture")
+        # A phone browser hands over all-black pictures when the page is not the one on screen (a second tab, the
+        # screen dimming, the camera being taken by another app). They are not a view of the table: drop them.
+        small = img[::8, ::8]
+        if float(small.mean()) < 6.0 and float(small.std()) < 4.0:
+            sys.phone_camera.black = getattr(sys.phone_camera, "black", 0) + 1
+            return {"ok": True, "ignored": "black"}
         sys.phone_camera.put(img)
         return {"ok": True}
 

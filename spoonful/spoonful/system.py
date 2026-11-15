@@ -92,6 +92,9 @@ class System:
         from .brain.aim_check import AimCheck
         self.aim_check = AimCheck(self)
         self.fsm.aim = self.aim_check
+        from .perception.rim import RimObserver
+        self.rim = RimObserver(cfg, self.table_frame, self.table_frame_age)    # is each cup's opening where it was?
+        self.fsm.rim = self.rim
         self.setup_state: dict = {}                # what Setup has done this run (see brain/photo_setup.status)
         from .brain.planner import Planner
         self.planner = Planner(None, self.log)
@@ -154,7 +157,7 @@ class System:
     def table_frame(self):
         """The picture used to find the spoon and the bowls: the phone's live camera when it is streaming, otherwise
         the plate camera or the laptop webcam. When the view changes, what was learned about the old view
-        (aim_check's image Jacobian) is dropped."""
+        (aim_check's image Jacobian, and how each cup's opening looked) is dropped."""
         img = self.phone_camera.image()
         view = "phone"
         if img is None and not self.phone_camera.in_use:
@@ -164,8 +167,16 @@ class System:
         if view != self._table_view:
             if self._table_view and hasattr(self, "aim_check"):
                 self.aim_check.forget()
+            if self._table_view and hasattr(self, "rim"):
+                self.rim.forget()
             self._table_view = view
         return img
+
+    def table_frame_age(self) -> float:
+        """Seconds since the picture table_frame() gives arrived."""
+        if self.phone_camera.in_use:
+            return time.monotonic() - self.phone_camera.at
+        return (self.plate_camera or self.camera).age_s()
 
     def voice_hint(self) -> str:
         """The foods on the table, as a plain list. No wake word and no command in it: on noise the recogniser can

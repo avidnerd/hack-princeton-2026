@@ -55,9 +55,27 @@ def test_touch_below_the_taught_dip_sets_the_depth(probe_system):
     assert _events(probe_system, "probe_touch")
 
 
-def test_touch_above_the_taught_dip_is_ignored(probe_system):
-    ev = _bite_with_jam_after(probe_system, 0.8)                # ~10 mm down = still above the dip
-    assert "ignored" in ev
+def test_touch_above_the_taught_dip_ends_the_bite(probe_system):
+    # It used to be ignored and the spoon sent on down to the taught depth (pressing on whatever was there).
+    # Now the spoon lifts back out and the bite ends. Full check: test_rim_scoop.py (legacy probe test).
+    s = probe_system
+    start_listening(s)
+    s.on_voice(None, "Spoonful, applesauce", 0.9)
+    wait_state(s, "SCOOPING")
+    t0 = time.time()
+    while s.fsm.motion_step < 1 and time.time() - t0 < 10:
+        time.sleep(0.02)
+    time.sleep(0.8)                                             # ~10 mm down = still above the dip
+    for j in ("shoulder", "elbow", "wrist_pitch"):
+        s.backend.jam(s.cfg.arm.servo_map[j], True)
+    while s.fsm.motion_step == 1 and time.time() - t0 < 15:
+        time.sleep(0.01)
+    for j in ("shoulder", "elbow", "wrist_pitch"):
+        s.backend.jam(s.cfg.arm.servo_map[j], False)
+    wait_state(s, "LISTENING")
+    assert "lifting out" in _events(s, "scoop_probe")[-1] and '"scoop_at_mm"' not in _events(s, "scoop_probe")[-1]
+    s.log.flush()
+    assert s.log.query("SELECT outcome FROM bites ORDER BY id")[-1]["outcome"] == "touch_above_food"
 
 
 def test_probe_without_resistance_still_scoops(probe_system):

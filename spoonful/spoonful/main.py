@@ -1,4 +1,4 @@
-"""python -m spoonful [run|calibrate|teach|replay|demo|test-arm|seed-sim] [--backend sim|xarm|raw] ...
+"""python -m spoonful [run|calibrate|teach|replay|demo|test-arm|seed-sim|dryrun] [--backend sim|xarm|raw] ...
 
 Motion entry points print their plan and do nothing unless --live is given (R2: --dry-run is the default).
 """
@@ -39,6 +39,11 @@ def cmd_run(args, page: str = "/") -> None:
         probe.close()
     cfg, sys = _system(args)
     sys.start()
+    from .io.go_key import GoKey
+    sys.go_key = GoKey(lambda: sys.fsm.post("go", source="button_key"))   # the GO button, whichever window is in front
+    sys.go_key.start()
+    kept = sys.rim.persist(cfg.path("data/rim_refs.pkl"))     # the camera's view of each confirmed cup, kept across restarts
+    sys.log.event("rim_refs_loaded", detail_count=kept)
     app = create_app(sys)
     url = f"http://{cfg.app.host}:{cfg.app.port}{page}"
     print(f"Spoonful on {url}  (backend={sys.backend_kind}, sim_face={sys.face.sim_enabled})")
@@ -47,9 +52,36 @@ def cmd_run(args, page: str = "/") -> None:
     if cfg.app.phone_link:
         from .app.phone import ensure_cert
         cert, key = ensure_cert(cfg.path("data"))
-        phone = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=cfg.app.phone_port, log_level="warning",
-                                              ssl_certfile=str(cert), ssl_keyfile=str(key)))
-        threading.Thread(target=phone.run, name="phone-https", daemon=True).start()
+        def serve_phone():
+            # After a quick restart the previous copy may still hold the port for a few seconds. Without the phone's
+            # page there is no camera on the table, so keep trying instead of giving up silently.
+            import socket
+            import time as _t
+            for attempt in range(30):
+                probe = socket.socket()
+                try:
+                    probe.bind(("0.0.0.0", cfg.app.phone_port))
+                    free = True
+                except OSError:
+                    free = False
+                finally:
+                    probe.close()
+                if free:
+                    try:
+                        phone = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=cfg.app.phone_port,
+                                                              log_level="warning", ssl_certfile=str(cert),
+                                                              ssl_keyfile=str(key)))
+                        sys.log.event("phone_server", detail_port=cfg.app.phone_port, attempt=attempt)
+                        phone.run()
+                    except BaseException as e:      # uvicorn exits the thread with SystemExit when it cannot bind
+                        sys.log.event("phone_server_failed", detail_error=repr(e)[:160], attempt=attempt)
+                else:
+                    if attempt == 0:
+                        print(f"Phone page: port {cfg.app.phone_port} is busy, retrying")
+                _t.sleep(1.0)
+            sys.log.event("phone_server_failed", detail_error=f"port {cfg.app.phone_port} never became free")
+            print(f"Phone page could not start: port {cfg.app.phone_port} is in use.")
+        threading.Thread(target=serve_phone, name="phone-https", daemon=True).start()
     try:
         uvicorn.run(app, host=cfg.app.host, port=cfg.app.port, log_level="warning")
     finally:
@@ -144,6 +176,13 @@ def cmd_seed_sim(args) -> None:
         print(line)
 
 
+def cmd_dryrun(args) -> None:
+    """Picture of the planned rim-aware scoop per bowl. Loads config only: no System, no arm, no camera."""
+    from .brain.rim_dryrun import run
+    for line in run(C.load(args.config), args.bowl, args.out):
+        print(line)
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="spoonful")
     ap.add_argument("--config", default=None)
@@ -175,6 +214,9 @@ def main(argv=None) -> None:
     ta = sub.add_parser("test-arm", help="print battery voltage and positions (no motion)")
     ta.add_argument("--seconds", type=float, default=3)
     sub.add_parser("seed-sim", help="write placeholder trajectories for the sim backend")
+    dr = sub.add_parser("dryrun", help="draw the planned scoop into each cup (no arm, no camera, nothing moves)")
+    dr.add_argument("--bowl", nargs="+", action="extend", default=None, metavar="NAME", help="default: every bowl")
+    dr.add_argument("--out", default=None, metavar="FILE", help="default: data/dryrun_<bowl>.png")
     args = ap.parse_args(argv)
     cmd = args.cmd or "run"
     if args.cmd is None:
@@ -201,6 +243,8 @@ def main(argv=None) -> None:
         cmd_test_arm(args)
     elif cmd == "seed-sim":
         cmd_seed_sim(args)
+    elif cmd == "dryrun":
+        cmd_dryrun(args)
 
 
 if __name__ == "__main__":

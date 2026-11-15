@@ -91,6 +91,10 @@ class Plan:
     name: str = ""
     contact_extra_deg: float = 0.0     # extra stall allowance (firm-food scoops only; capped in contact.py)
     probe_deg: Optional[float] = None  # probe: stop (successfully) when a joint lags this much beyond its starting sag
+    probe_settle_s: Optional[float] = None  # probe: time before a stall can count (None = Arm.PROBE_SETTLE_S). 0 for a
+                                            # descent that starts from a settled hold: baseline = the lag at the start
+    lag_limit_deg: Optional[float] = None   # contact when a lifting joint's lag grows this much beyond its lag at the
+                                            # start of the plan (tightens only: the absolute thresholds still apply)
 
     @property
     def duration(self) -> float:

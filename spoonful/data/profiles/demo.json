@@ -9,7 +9,7 @@
   0.0
  ],
  "pace_scale": 1.0,
- "learned_interval_s": 0.0,
+ "learned_interval_s": 12.7,
  "speech": true,
  "auto_pace": false
 }

@@ -78,12 +78,20 @@ class Log:
                     con.commit()
                     pending = 0
                 continue
-            sql, args = item
+            sql, args, *reply = item
+            rowid = None
             try:
-                con.execute(sql, args)
+                rowid = con.execute(sql, args).lastrowid
                 pending += 1
             except sqlite3.Error as e:  # never let logging take the system down
                 print(f"[log] {e}: {sql}")
+            if reply:                   # a caller is waiting for the row (bite): commit now so it can read it back
+                try:
+                    con.commit()
+                    pending = 0
+                except sqlite3.Error as e:
+                    print(f"[log] {e}: commit")
+                reply[0].put(rowid)
             if pending >= 200:
                 con.commit()
                 pending = 0
@@ -158,12 +166,24 @@ class Log:
     def bite(self, **row: Any) -> int:
         cols = ["session_id", "profile", "ts_request", "ts_delivered", "ts_done", "outcome", "holds",
                 "aborts", "offset_mm", "source", "depth_mm"]
-        con = self._con()
-        cur = con.execute(f"INSERT INTO bites({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
-                          tuple(row.get(c) for c in cols))
-        con.commit()
+        sql = f"INSERT INTO bites({','.join(cols)}) VALUES({','.join('?' * len(cols))})"
+        args = tuple(row.get(c) for c in cols)
+        # Written by the writer thread, which holds the database's write lock while it has rows pending. Inserting
+        # from the caller's own connection waited for that lock: about 260 ms on the FSM thread at the end of a
+        # bite, longer than the watchdog's 250 ms, so now and then the watchdog parked the arm (even after a STOP).
+        rowid, reply = None, queue.Queue()
+        if self._thread.is_alive():
+            self._q.put((sql, args, reply))
+            try:
+                rowid = reply.get(timeout=2.0)
+            except queue.Empty:
+                pass
+        else:                               # after close(): no writer to wait behind
+            con = self._con()
+            rowid = con.execute(sql, args).lastrowid
+            con.commit()
         self._notify("bite", row)
-        return int(cur.lastrowid)
+        return int(rowid or 0)
 
     # -- queries --
     def query(self, sql: str, args: tuple = ()) -> list[dict]:

@@ -116,9 +116,9 @@ face:
   jaw_open_threshold: 0.25
   hysteresis_fraction: 0.7
   yaw_max_deg: 22.0
-  yaw_center_deg: -11.8
+  yaw_center_deg: -20.6
   pitch_max_deg: 20.0
-  pitch_offset_deg: 12.8
+  pitch_offset_deg: 17.2
   presence_hold_s: 0.5
   mouth_open_hold_s: 0.3
   mouth_closed_taken_s: 0.5
@@ -271,6 +271,38 @@ plate:
     enabled: false
     max_rescoops: 2
     wait_s: 4.0
+  rim:
+    enabled: true
+    require_view: true
+    require_confirmed: true
+    validated_empty: false
+    default_rim_mm: 60.0
+    clearance_mm: 3.0
+    hover_above_rim_mm: 25.0
+    align_tol_mm: 4.0
+    align_max_iters: 3
+    align_max_fix_mm: 40.0
+    bite_depth_mm: 14.0
+    sag_headroom_mm: 16.0
+    align_low_mm: 5.0
+    align_high_mm: 10.0
+    descent_step_mm: 16.0
+    descent_settle_s: 0.8
+    spoon_view_required: false
+    in_cup_stall_retries: 3
+    press_deg: 5.0
+    descent_speed_mm_s: 6.0
+    free_air_mm: 10.0
+    stall_deg: 3.0
+    out_contact_deg: 6.0
+    scoop_contact_deg: 4.5
+    view_max_age_s: 2.0
+    view_valid_s: 30.0
+    min_confidence: 0.55
+    moved_tol_mm: 6.0
+    max_follow_mm: 45.0
+    min_axis_ratio: 0.2
+    reference_max_age_h: 4.0
   scoop_styles:
     liquid:
       depth_mm: 0.0
@@ -295,6 +327,14 @@ plate:
   default_texture: soft
   look_before_scoop: true
   explain_attack: true
+  food_names:
+    brown paste: caramel dip
+    peanut butter: caramel dip
+    caramel sauce: caramel dip
+    caramel: caramel dip
+    brown sauce: caramel dip
+    caramel spread: caramel dip
+    nut butter: caramel dip
   empty_confirm: 2
   bowls:
   - name: bowl1
@@ -308,7 +348,7 @@ plate:
     watch: false
     attack:
       strategy: skim
-      why: Applesauce is soft and spreadable, ideal for a shallow surface skim.
+      why: Applesauce is soft and spreadable, requiring a shallow surface scoop.
       source: vision
       entry_angle_deg: 30.0
       depth_mm: 5.0
@@ -316,6 +356,17 @@ plate:
       speed: 0.6
       drag_mm: 20.0
       contact_extra_deg: 0
+    cup:
+      x_mm: 192.8
+      y_mm: 60.5
+      radius_mm: 33.7
+      rim_mm: 41.6
+      wall_mm: 4.8
+      floor_mm: 1.5
+      food_below_rim_mm: null
+      uncertainty_mm: 13.2
+      confirmed: false
+      source: photo
   - name: bowl2
     roi:
     - 0
@@ -323,18 +374,37 @@ plate:
     - 1280
     - 720
     scoop: ''
-    label: honeydew jelly
+    label: caramel dip
     watch: false
     attack:
-      strategy: stab_and_saw
-      why: The jelly is firm and requires cutting to scoop effectively.
-      source: vision
-      entry_angle_deg: 60.0
-      depth_mm: 10.0
-      saw_strokes: 2
-      speed: 0.5
-      drag_mm: 10.0
-      contact_extra_deg: 4.0
+      strategy: dig
+      entry_angle_deg: 45
+      depth_mm: 10
+      saw_strokes: 0
+      speed: 0.7
+      drag_mm: 25
+      contact_extra_deg: 2
+      why: it's thick, so I'll dig in at an angle
+      source: rules
+    cup:
+      x_mm: 219.7
+      y_mm: -69.4
+      radius_mm: 53.1
+      rim_mm: 59.0
+      wall_mm: 2.0
+      floor_mm: 3.0
+      food_below_rim_mm: null
+      uncertainty_mm: 3.0
+      confirmed: true
+      source: confirmed
+spoon:
+  measured: true
+  bowl_length_mm: 32.8
+  bowl_width_mm: 21.4
+  bowl_depth_mm: 10.3
+  neck_length_mm: 66.8
+  neck_width_mm: 9.8
+  axis_tilt_deg: 0.0
 app:
   host: 127.0.0.1
   port: 8000

@@ -47,6 +47,9 @@ class Motion:
         self.error: Optional[BaseException] = None
         self.started = time.time()
         self.touched: Optional[dict] = None    # probe motions: joint pose where resistance was felt
+        self.residual_deg: Optional[dict] = None    # finished, but these joints were still this far (signed deg,
+                                                    # commanded - measured) from the command: finished while pressing
+        self.lag_growth_deg: Optional[dict] = None  # at the finish: change of each lifting joint's lag since the start
 
     def finish(self, error: Optional[BaseException] = None) -> None:
         if not self.done.is_set():
@@ -99,6 +102,10 @@ class Arm:
         self.contact = ContactMonitor(cfg)
         self._probe_base: Optional[dict] = None
         self._probe_since: Optional[float] = None
+        self._lag_base: dict[str, float] = {}      # signed lag of the lifting joints when the current plan started
+        if getattr(backend, "tip_fn", 0) is None:  # sim only: lets SimBackend.obstruct() know where the spoon tip is
+            backend.tip_fn = lambda pos: K.fk(self.cfg.kinematics,
+                                              {j: self.to_deg(j, pos[self.ids[j]]) for j in ARM_JOINTS})
         self.last_contact: Optional[Contact] = None
         self._hid_errors = 0
         self._torque_off_at: Optional[float] = None
@@ -180,6 +187,8 @@ class Arm:
             self.mode = "traj"
             self.contact.reset()
             self._probe_base, self._probe_since = None, None
+            self._lag_base = {j: self.setpoint[j] - self.state.deg[j] for j in self.PROBE_JOINTS
+                              if j in self.setpoint and j in self.state.deg}
         return m
 
     def goto(self, pose: Pose, speed: str = "normal", speed_factor: float = 1.0, name: str = "goto") -> Motion:
@@ -424,8 +433,14 @@ class Arm:
             self._send(nxt, dt * 1000 * 1.5)
             extra = self._plan.contact_extra_deg if self.mode == "traj" and self._plan is not None else 0.0
             c = self.contact.check(now, self.setpoint, self.state.deg, speed, extra)
+            if c is None and self.mode == "traj" and self._plan is not None and self._plan.lag_limit_deg is not None:
+                c = self.contact.check_growth(now, self.setpoint, self.state.deg, self._lag_base,
+                                              self._plan.lag_limit_deg, speed)
             if c:
-                if self.log:
+                if self.log and c.grew_deg is not None:
+                    self.log.fault("contact", joint=c.joint, err_deg=round(c.err_deg, 1), face_zone=c.in_face_zone,
+                                   grew_deg=round(c.grew_deg, 1))
+                elif self.log:
                     self.log.fault("contact", joint=c.joint, err_deg=round(c.err_deg, 1), face_zone=c.in_face_zone)
                 self.setpoint = {j: self.state.deg[j] for j in ARM_JOINTS}
                 self._send(self.setpoint, 100)
@@ -444,8 +459,13 @@ class Arm:
                 self._plan, self._motion = None, None
                 self.mode = "hold"
                 if m:
+                    lag = {j: nxt[j] - self.state.deg[j] for j in ARM_JOINTS}
+                    over = {j: round(e, 1) for j, e in lag.items() if abs(e) > self.RESIDUAL_DEG}
+                    m.residual_deg = over or None
+                    m.lag_growth_deg = {j: round(lag[j] - b, 1) for j, b in self._lag_base.items()}
                     m.finish()
 
+    RESIDUAL_DEG = 3.0          # a plan that ends with a joint further than this from its command ended pressing
     PROBE_JOINTS = ("shoulder", "elbow", "wrist_pitch")
     PROBE_WINDOW_S = 0.6        # round-robin reads refresh each joint every ~0.25 s on the real arm
     PROBE_STALL_RATIO = 0.35
@@ -456,11 +476,14 @@ class Arm:
         lag alone is not a touch. A touch is a STALL: over the last PROBE_WINDOW_S the command moved a joint but the
         joint itself moved < PROBE_STALL_RATIO of that, and its lag grew by >= probe_deg/2 since the descent
         started. Held 0.1 s -> stop there; the motion succeeds with .touched set. Called with the lock held."""
-        if now - self._plan_t0 < self.PROBE_SETTLE_S:   # joints still catching up with the descent: lag is normal
-            return False
+        settle = self._plan.probe_settle_s
+        if now - self._plan_t0 < (self.PROBE_SETTLE_S if settle is None else settle):
+            return False                                # joints still catching up with the descent: lag is normal
         err = {j: abs(self.setpoint[j] - self.state.deg[j]) for j in self.PROBE_JOINTS}
         if self._probe_base is None:
             self._probe_base = err
+            if settle is not None and settle <= 0 and len(self._lag_base) == len(err):
+                self._probe_base = {j: abs(b) for j, b in self._lag_base.items()}   # the lag at the settled hold
             self._probe_hist = collections.deque()
         self._probe_hist.append((now, {j: self.setpoint[j] for j in self.PROBE_JOINTS},
                                  {j: self.state.deg[j] for j in self.PROBE_JOINTS}))

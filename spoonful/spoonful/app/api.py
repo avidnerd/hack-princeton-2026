@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..arm import kinematics as K
 from ..arm.teach import save_current_pose
@@ -495,9 +495,88 @@ def setup_build(req: Request):
     sys.cfg.save()
     sys.lib.reload()
     sys.plate.reset_bowls()
+    sys.rim.forget()                             # new bowls: what the camera learned was about the old ones
     sys.log.event("setup_built", detail_moves=saved, bowls=[b.name for b in bowls])
     return {"ok": True, "moves": saved, "bowls": [b.name for b in bowls],
             "foods": {k: v.get("food") for k, v in st["boxes"].items()}}
+
+
+class CupSize(BaseModel):
+    rim_mm: float = Field(gt=0, le=300)        # the cup's height
+    width_mm: float = Field(gt=0, le=300)      # inside width of its opening
+
+
+@router.post("/setup/cup/{bowl}/confirm")
+def setup_cup_confirm(req: Request, bowl: str, b: CupSize):
+    """The spoon is hovering over the middle of this cup's opening (after Show aim): take the arm's measured tip as
+    the cup's centre, then let the table camera learn the opening. Answers once the arm is back at rest."""
+    from ..brain.photo_setup import SetupProblem, confirm_cup
+    sys = _sys(req)
+    _need_idle(sys)
+    try:
+        return {"ok": True, **confirm_cup(sys, bowl, b.rim_mm, b.width_mm)}
+    except SetupProblem as e:
+        raise HTTPException(409, str(e))
+
+
+class SpoonSize(BaseModel):
+    bowl_length_mm: float = Field(gt=0, le=120)
+    bowl_width_mm: float = Field(gt=0, le=80)
+    bowl_depth_mm: float = Field(gt=0, le=40)
+    neck_length_mm: float = Field(gt=0, le=250)
+    neck_width_mm: float = Field(gt=0, le=60)
+    axis_tilt_deg: float = Field(default=0.0, ge=-45, le=45)
+    measured: bool = False
+
+
+@router.post("/setup/spoon")
+def setup_spoon(req: Request, b: SpoonSize):
+    """The spoon's own sizes, measured with a ruler. The staged scoop keeps this shape clear of the cup."""
+    sys = _sys(req)
+    _need_idle(sys)
+    for k, v in b.model_dump().items():
+        setattr(sys.cfg.spoon, k, v)
+    sys.cfg.save()
+    sys.log.event("spoon_size", detail_spoon=sys.cfg.spoon.model_dump())
+    return {"ok": True, "spoon": sys.cfg.spoon.model_dump()}
+
+
+@router.get("/rim/view.jpg")
+def rim_view(req: Request):
+    """The table camera's picture with each confirmed cup's opening drawn on it, to check the outline really sits
+    on the rim. While idle it also takes a fresh look at every cup the camera has learned."""
+    import cv2
+    sys = _sys(req)
+    img = sys.table_frame()
+    if img is None:
+        raise HTTPException(503, "No picture from the table camera.")
+    if sys.fsm.state == S.IDLE:
+        for name in list(sys.rim.refs):
+            sys.rim.observe(name)
+    ok, jpg = cv2.imencode(".jpg", sys.rim.draw(img), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return Response(jpg.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/rim/preview/{bowl}.png")
+def rim_preview(req: Request, bowl: str):
+    """A drawing of the scoop the robot would make into this cup. Nothing moves."""
+    import cv2
+    sys = _sys(req)
+    if not any(b.name == bowl for b in sys.cfg.plate.bowls):
+        raise HTTPException(404, "There is no such bowl.")
+    try:
+        from ..brain import rim_dryrun
+    except ImportError:
+        raise HTTPException(503, "The scoop preview isn't available in this version.")
+    try:
+        img = rim_dryrun.render(sys.cfg, bowl)
+        ok, png = cv2.imencode(".png", img)
+    except Exception as e:
+        sys.log.event("rim_preview_failed", detail_bowl=bowl, error=repr(e)[:200])
+        raise HTTPException(503, "Couldn't draw the scoop preview.")
+    if not ok:
+        raise HTTPException(503, "Couldn't draw the scoop preview.")
+    return Response(png.tobytes(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/setup/clear")

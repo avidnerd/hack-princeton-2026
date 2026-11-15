@@ -6,6 +6,9 @@ find_bowls   one photo from above: find every bowl (photo_map), outline it, and 
              from it. Nothing is changed yet: the diner chooses which bowls to be served from.
 use_bowls    the chosen bowls become the robot's bowls: a scoop and a lift for each, and vision picks how to scoop
              each food. Bowls that were not chosen are unknown to the robot (voice and planning can't pick them).
+             Each also gets a cup (where the photo put it, how wide, how unsure): not yet confirmed.
+confirm_cup  the spoon is hovering over the middle of a cup's opening and a person says so: where the arm measures
+             its own tip becomes the cup's centre, and the table camera learns how that opening looks.
 status       what the Setup screen shows for each step.
 """
 from __future__ import annotations
@@ -16,7 +19,7 @@ import time
 from ..arm import kinematics as K
 from ..arm.scoop_style import dip_index
 from ..arm.trajectory import plan
-from ..config import ARM_JOINTS, BowlCfg
+from ..config import ARM_JOINTS, BowlCfg, CupCfg
 from ..perception.photo_map import PHOTO_TIP_MM, PROMPT, analyze_robust, predicted_surface_mm
 from . import quick_setup as QS
 
@@ -127,9 +130,12 @@ def find_bowls(sys, img) -> list[dict]:
     for i, bw in enumerate(m["bowls"]):
         box = [int(v) for v in bw["box_px"]]
         x, y = bw["mm"]
-        c = {"id": i, "food": bw.get("food") or "food", "amount": bw.get("amount"), "texture": bw.get("texture"),
+        food = bw.get("food") or "food"
+        food = sys.cfg.plate.food_names.get(food.strip().lower(), food)     # the operator's name for it wins
+        c = {"id": i, "food": food, "amount": bw.get("amount"), "texture": bw.get("texture"),
              "sure": bool(bw["sure"]), "votes": bw["votes"], "views": bw["views"],
-             "uncertainty_mm": bw["uncertainty_mm"], "at_cm": [round(x / 10), round(y / 10)],
+             "uncertainty_mm": bw["uncertainty_mm"], "diameter_mm": round(float(bw.get("diameter_mm") or 0), 1),
+             "at_cm": [round(x / 10), round(y / 10)],
              "box": box, "poly": outline(img, box), "ok": True, "why": "", "used": False}
         surface = predicted_surface_mm(bw.get("amount"))
         try:
@@ -173,7 +179,8 @@ def use_bowls(sys, ids: list[int]) -> list[dict]:
         c["name"] = f"bowl{n}"
         moves[f"scoop_bowl{n}"] = ("path", c["_scoop"])
         moves[f"lift_bowl{n}"] = ("path", c["_lift"])
-        bowls.append(BowlCfg(name=c["name"], roi=(0, 0, 1280, 720), label=c["food"], watch=False))
+        bowls.append(BowlCfg(name=c["name"], roi=(0, 0, 1280, 720), label=c["food"], watch=False,
+                             cup=_photo_cup(c, _measured_before(sys, c["food"]))))
     moves["scoop"], moves["lift"] = moves["scoop_bowl1"], moves["lift_bowl1"]
     QS.save_all(sys.cfg, sys.lib.dir, {"moves": moves})
     sys.cfg.plate.bowls = bowls
@@ -181,7 +188,9 @@ def use_bowls(sys, ids: list[int]) -> list[dict]:
     sys.plate.reset_bowls()
     sys.fsm.last_bowl, sys.fsm.bite_queue = None, []
     sys.aim_check.forget()                       # new bowls, maybe a moved laptop: the camera check starts over
-    sys.setup_state["nudges"] = {}
+    if getattr(sys, "rim", None) is not None:
+        sys.rim.forget()                         # and no cup is where the camera learned it
+    sys.setup_state.update(nudges={}, aimed={}, confirmed_aim={}, cups={})
     result = []
     for c in chosen:
         sys.food_surface.est[c["name"]] = c["_surface"]
@@ -210,19 +219,39 @@ def _dip(sys, name: str) -> dict:
     return poses[dip_index(sys.cfg.kinematics, poses)]
 
 
-def aim(sys, name: str) -> None:
-    """Hover the spoon tip above where it will dip into this bowl, so the aim can be checked by eye."""
-    if sys.fsm.state.value != "IDLE":
-        raise SetupProblem("End the session first.")
+def aim_pose(sys, name: str) -> dict:
+    """Where "Show aim" holds the spoon. A bowl with a cup: tip over the cup's centre, clear of its rim, which is
+    where the staged scoop goes in. A confirmed cup: the very pose it was confirmed in (the cup's centre is where
+    the arm measured its tip there, sag included, so commanding that point again would stop short of it).
+    Otherwise: above the saved scoop's dip."""
     kin = sys.cfg.kinematics
+    cup = _cup(sys, name)
+    held = (sys.setup_state.get("confirmed_aim") or {}).get(name)
+    if cup is not None and cup.confirmed and held:
+        return dict(held)
     dip = _dip(sys, name)
     x, y, z = K.fk(kin, dip)
+    q, z = dict(dip), z + AIM_ABOVE_MM
+    if cup is not None:
+        rc = sys.cfg.plate.rim
+        x, y = cup.x_mm, cup.y_mm
+        rim = cup.rim_mm if cup.rim_mm is not None else rc.default_rim_mm
+        z = max(z, rim + rc.hover_above_rim_mm + sys.cfg.spoon.bowl_depth_mm)
+        q["base"] = kin.zero_deg["base"] + math.degrees(math.atan2(y, x)) / kin.sign["base"]
     QS.LIMITS = sys.cfg.arm.soft_limits_deg
     try:
-        above = QS._at(kin, dip, math.hypot(x, y), z + AIM_ABOVE_MM)
+        return QS._at(kin, q, math.hypot(x, y), z)
     except QS.SetupError as e:
         raise SetupProblem("Can't hover above that bowl.") from e
+
+
+def aim(sys, name: str) -> None:
+    """Hover the spoon tip above where it will go into this bowl, so the aim can be checked by eye."""
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    above = aim_pose(sys, name)
     sys.arm.goto(above, "normal", 0.5, name="aim")
+    sys.setup_state.setdefault("aimed", {})[name] = dict(above)      # confirm_cup checks the arm is still here
 
 
 def move_scoop(sys, name: str, further_mm: float, left_mm: float) -> None:
@@ -261,6 +290,7 @@ def move_scoop(sys, name: str, further_mm: float, left_mm: float) -> None:
         moves["scoop"], moves["lift"] = moves[f"scoop_{name}"], moves[f"lift_{name}"]
     QS.save_all(sys.cfg, sys.lib.dir, {"moves": moves})
     sys.lib.reload()
+    _cup_moved(sys, name, dx, dy)
     sys.log.event("scoop_moved", detail_bowl=name, further_mm=round(further_mm, 1), left_mm=round(left_mm, 1))
 
 
@@ -278,6 +308,236 @@ def nudge(sys, name: str, further_mm: float, left_mm: float) -> dict:
     return {"further_mm": new_total[0], "left_mm": new_total[1]}
 
 
+# ---------------------------------------------------------------------------------------------- cups
+CONFIRM_WITHIN_MM = 35     # measured tip vs the pose "Show aim" sent the arm to (the arm sags a centimetre or two)
+CONFIRMED_UNCERTAINTY_MM = 3.0
+UNCONFIRMED_MM = CupCfg.model_fields["uncertainty_mm"].default      # what a cup falls back to when it is moved
+MAX_CUP_MM = 300           # a height or width beyond this is a typing slip
+CAMERA_SETTLE_S = 0.7      # after the arm stops, before the picture the camera learns the cup from
+ROI_PAD = 0.12             # the dish's box, grown by this much, is where the opening is looked for
+
+NOT_HOVERING = "The spoon isn't hovering over this cup. Press Show aim, centre the spoon with the arrows, then confirm."
+SEEN = "Position confirmed. Camera sees the opening."
+WHY_UNSEEN = {              # RimNotFound / Observation reasons, in plain words
+    "no_frame": "there is no picture from the table camera", "stale_frame": "the table camera's picture has stalled",
+    "no_ellipse": "it can't make out the rim", "low_contrast": "it can't make out the rim",
+    "ambiguous": "it can't tell which ring is the rim", "partly_hidden": "something is in the way",
+    "too_flat": "the camera is too low to see into the cup", "no_reference": "confirm the cup again",
+    "reference_stale": "it was confirmed a long time ago; confirm it again",
+    "camera_moved": "the camera has moved; confirm the cup again",
+    "size_changed": "the camera or the cup has moved; confirm it again",
+    "moved_too_far": "the cup has moved too far; line it up again",
+    "moved_unmeasurable": "the cup has moved; line it up again",
+}
+
+
+def _bowl(sys, name: str) -> BowlCfg:
+    b = next((b for b in sys.cfg.plate.bowls if b.name == name), None)
+    if b is None:
+        raise SetupProblem("There is no such bowl. Map the table first.")
+    return b
+
+
+def _cup(sys, name: str):
+    b = next((b for b in sys.cfg.plate.bowls if b.name == name), None)
+    return b.cup if b is not None else None
+
+
+def _measured_before(sys, food: str):
+    """The cup this food was in before the table was mapped again, if its size was measured: a container keeps
+    its height and width when it is moved, so a new photo must not replace a ruler with a guess."""
+    for b in sys.cfg.plate.bowls:
+        if b.label == food and b.cup is not None and b.cup.rim_mm is not None:
+            return b.cup
+    return None
+
+
+def _photo_cup(c: dict, before=None) -> CupCfg:
+    """The cup as the overhead photo saw it: its box's centre, the box's width less the walls, and the photo's own
+    spread as how unsure the centre is. Not confirmed, and its height is not known."""
+    wall = CupCfg.model_fields["wall_mm"].default
+    x, y = c["_mm"]
+    cup = CupCfg(x_mm=round(float(x), 1), y_mm=round(float(y), 1),
+                 radius_mm=round(max(1.0, float(c.get("diameter_mm") or 0) / 2 - wall), 1),
+                 uncertainty_mm=float(c.get("uncertainty_mm") or UNCONFIRMED_MM), source="photo")
+    if before is not None:          # position from the new photo, size from the ruler
+        cup.radius_mm, cup.rim_mm, cup.wall_mm, cup.floor_mm = (before.radius_mm, before.rim_mm, before.wall_mm,
+                                                                before.floor_mm)
+        cup.food_below_rim_mm = before.food_below_rim_mm
+    return cup
+
+
+def _cup_moved(sys, name: str, dx: float, dy: float) -> None:
+    """The bowl's scoop was moved on the table: its cup moves with it, and nobody has seen the spoon over the new
+    spot, so it is no longer confirmed and the camera's memory of it is dropped."""
+    b = next((b for b in sys.cfg.plate.bowls if b.name == name), None)
+    if b is None or b.cup is None:
+        return
+    c = b.cup
+    b.cup = c.model_copy(update=dict(
+        x_mm=round(c.x_mm + dx, 1), y_mm=round(c.y_mm + dy, 1), confirmed=False, source="photo",
+        uncertainty_mm=max(c.uncertainty_mm, UNCONFIRMED_MM) if c.confirmed else c.uncertainty_mm))
+    if getattr(sys, "rim", None) is not None:
+        sys.rim.forget(name)
+    for k in ("confirmed_aim", "aimed", "cups"):
+        sys.setup_state.setdefault(k, {}).pop(name, None)
+    sys.cfg.save()
+
+
+def _dishes(sys, img) -> list[dict]:
+    """Every dish the table camera sees, with its box in the pixels of img. (AimCheck._dishes asks the same
+    question but keeps only a point on each dish; the rim search needs the region.) "x" is in the 1280-wide
+    reference, like the spoon tip AimCheck.pick_dish compares it with."""
+    import cv2
+    from .aim_check import DISHES_PROMPT
+    jpg = cv2.imencode(".jpg", cv2.resize(img, (1280, 720)), [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+    d = sys.plate.image_generate(jpg, DISHES_PROMPT)
+    if isinstance(d, dict):
+        d = d.get("dishes") or d.get("items") or [d]
+    h, w = img.shape[:2]
+    out = []
+    for b in d if isinstance(d, list) else []:
+        box = b.get("box_2d") if isinstance(b, dict) else None
+        if not (isinstance(box, (list, tuple)) and len(box) == 4):
+            continue
+        y0, x0, y1, x1 = (float(v) for v in box)
+        if x1 - x0 < 5 or y1 - y0 < 5:
+            continue
+        out.append({"food": str(b.get("food") or ""), "x": (x0 + x1) / 2 * 1.28,
+                    "box": (x0 * w / 1000, y0 * h / 1000, x1 * w / 1000, y1 * h / 1000)})
+    return out
+
+
+def _learn_view(sys, name: str) -> tuple[bool, str]:
+    """Just after a confirm: get the arm out of the picture, then let the table camera learn how this cup's opening
+    looks from where it stands. Vision is asked (setup time only) which dish is this one; the rim itself is then
+    found by the rim observer. (True, "") or (False, why in plain words). The cup stays confirmed either way."""
+    from ..perception.plate import match_food
+    from ..perception.rim import RimNotFound
+    from .aim_check import AimCheck
+    rim = getattr(sys, "rim", None)
+    if rim is None:
+        return False, "the camera check isn't running"
+    rim.forget(name)
+    cup = _cup(sys, name)
+    vision = sys.plate.image_generate is not None
+    tip = None
+    if vision and len(sys.cfg.plate.bowls) > 1:          # while the spoon still points at the cup: which dish is it
+        try:
+            tip = sys.aim_check._tip_px()
+        except Exception:
+            tip = None
+    try:
+        rest = sys.lib.pose("rest") if sys.lib.has("rest") else dict(sys.cfg.arm.home_pose)
+        arrived = sys.arm.goto(dict(rest), "normal", 0.6, name="cup_confirmed").wait(15).ok
+    except Exception:
+        arrived = False
+    if not arrived or sys.fsm.state.value != "IDLE":
+        return False, "the arm didn't move out of the camera's way"
+    time.sleep(CAMERA_SETTLE_S)
+    if not vision:
+        return False, "vision isn't available"
+    img = sys.table_frame()
+    if img is None:
+        return False, WHY_UNSEEN["no_frame"]
+    try:
+        dishes = _dishes(sys, img)
+    except Exception as e:
+        sys.log.event("cup_view_failed", detail_bowl=name, error=repr(e)[:200])
+        return False, "vision didn't answer"
+    food = sys.plate.food_of(name) or ""
+    if tip is None and len(dishes) > 1:                 # only the food's name can tell them apart
+        dishes = [d for d in dishes if food and match_food(d["food"], {"it": food})]
+        if len(dishes) != 1:
+            return False, "it can't tell which cup is this one"
+    dish = AimCheck.pick_dish(dishes, food, tip if tip is not None else (0.0, 0.0))
+    if dish is None:
+        return False, "it doesn't see a cup"
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = dish["box"]
+    px, py = ROI_PAD * (x1 - x0), ROI_PAD * (y1 - y0)
+    x0, y0, x1, y1 = max(0.0, x0 - px), max(0.0, y0 - py), min(float(w), x1 + px), min(float(h), y1 + py)
+    try:
+        rim.set_reference(name, img, (x0, y0, x1 - x0, y1 - y0), (cup.x_mm, cup.y_mm), cup.radius_mm)
+    except RimNotFound as e:
+        sys.log.event("cup_view_failed", detail_bowl=name, reason=e.reason)
+        return False, WHY_UNSEEN.get(e.reason, "it can't make out the rim")
+    obs = rim.observe(name)                             # the first look, so the screen shows what the camera says
+    sys.log.event("cup_view", detail_bowl=name, status=obs.status, reason=obs.reason,
+                  calibrated=rim.calib is not None)
+    return True, ""
+
+
+def confirm_cup(sys, name: str, rim_mm: float, width_mm: float) -> dict:
+    """A person has looked: the spoon tip is over the middle of this cup's opening. rim_mm: the cup's height;
+    width_mm: the inside width of its opening, both measured with a ruler.
+
+    The arm must still be hovering where "Show aim" (or an arrow) left it. The cup's centre becomes the tip as the
+    arm measures it from its own joints right now, sag included, not the point it was told to go to. Then the arm
+    goes to rest and the table camera learns the opening (_learn_view)."""
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    try:
+        rim_mm, width_mm = float(rim_mm), float(width_mm)
+    except (TypeError, ValueError):
+        rim_mm = width_mm = float("nan")
+    if not (0 < rim_mm <= MAX_CUP_MM and 0 < width_mm <= MAX_CUP_MM):
+        raise SetupProblem("Enter the cup's height and the width of its opening, in millimetres.")
+    b = _bowl(sys, name)
+    kin = sys.cfg.kinematics
+    pose = (sys.setup_state.get("aimed") or {}).get(name)
+    st = sys.arm.state
+    if pose is None or sys.arm.busy or not sys.arm.torque_on or not st.ok:
+        raise SetupProblem(NOT_HOVERING)
+    tip = K.fk(kin, st.deg)
+    if math.dist(tip, K.fk(kin, pose)) > CONFIRM_WITHIN_MM:
+        raise SetupProblem(NOT_HOVERING)
+    keep = {k: getattr(b.cup, k) for k in ("wall_mm", "floor_mm", "food_below_rim_mm")} if b.cup is not None else {}
+    b.cup = CupCfg(x_mm=round(tip[0], 1), y_mm=round(tip[1], 1), radius_mm=width_mm / 2, rim_mm=rim_mm,
+                   uncertainty_mm=CONFIRMED_UNCERTAINTY_MM, confirmed=True, source="confirmed", **keep)
+    sys.setup_state.setdefault("confirmed_aim", {})[name] = dict(pose)
+    blocked = getattr(sys.fsm, "rim_blocked", None)     # a person has lined it up again: the last touch is history
+    if isinstance(blocked, dict):
+        blocked.pop(name, None)
+    sys.cfg.save()
+    sys.log.event("cup_confirmed", detail_bowl=name, at_mm=[b.cup.x_mm, b.cup.y_mm], rim_mm=rim_mm,
+                  width_mm=width_mm, tip_z_mm=round(tip[2], 1))
+    seen, why = _learn_view(sys, name)
+    sys.setup_state.setdefault("cups", {})[name] = {"why": why}
+    paused = " Scoops from this cup are paused." if sys.cfg.plate.rim.require_view else ""
+    message = SEEN if seen else f"Position confirmed, but the camera can't see the opening: {why}.{paused}"
+    return {"confirmed": True, "at_mm": [b.cup.x_mm, b.cup.y_mm], "camera": seen, "message": message}
+
+
+def cup_status(sys, b: BowlCfg) -> dict:
+    """What the Bowls tab shows for one bowl's cup, with one plain line that says where it stands."""
+    c, rim = b.cup, getattr(sys, "rim", None)
+    obs = rim.last.get(b.name) if rim is not None else None
+    st = {"has_cup": c is not None, "rim_mm": c.rim_mm if c else None,
+          "width_mm": round(2 * c.radius_mm, 1) if c else None, "measured": bool(c and c.rim_mm is not None),
+          "confirmed": bool(c and c.confirmed), "uncertainty_mm": c.uncertainty_mm if c else None,
+          "source": c.source if c else "", "reference": bool(rim is not None and rim.has_reference(b.name)),
+          "seen": obs.status if obs else None, "reason": obs.reason if obs else "",
+          # brain/rim_scoop's note that the spoon touched this cup where it now stands
+          "blocked": b.name in (getattr(sys.fsm, "rim_blocked", None) or ())}
+    require_view = sys.cfg.plate.rim.require_view
+    if not st["confirmed"]:
+        ok, line = False, "Not confirmed yet: press Show aim, centre the spoon, then confirm."
+    elif st["blocked"]:
+        ok, line = False, "The spoon touched this cup. Centre the spoon over it and confirm again."
+    elif not st["reference"] or st["seen"] == "lost":
+        why = WHY_UNSEEN.get(st["reason"], "") if st["reference"] else \
+            ((sys.setup_state.get("cups") or {}).get(b.name) or {}).get("why") or WHY_UNSEEN["no_reference"]
+        ok = not require_view
+        line = ("Camera can't see the opening: scoops from this cup are paused." if require_view
+                else "Position confirmed. The camera can't see the opening.") + (f" ({why})" if why else "")
+    elif st["seen"] == "moved":
+        ok, line = True, "Position confirmed. The cup has moved a little; the spoon will follow it."
+    else:
+        ok, line = True, SEEN
+    return {**st, "ok": ok, "line": line}
+
+
 def status(sys) -> dict:
     st = sys.setup_state
     kin = sys.cfg.kinematics
@@ -291,4 +551,6 @@ def status(sys) -> dict:
                   "photo_size": st.get("photo_size"), "photo_at": st.get("photo_at")},
         "looking": {"at": st.get("looking_at")},
         "aim": sys.aim_check.status(),
+        "cups": {b.name: cup_status(sys, b) for b in sys.cfg.plate.bowls},
+        "spoon": sys.cfg.spoon.model_dump(),
     }

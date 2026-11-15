@@ -138,6 +138,29 @@
   <section data-pane="plate" class="hidden">
     <p class="note" id="plate-status"></p>
     <div id="plate-bowls"></div>
+    <img id="cup-preview" class="photo hidden" alt="Drawing of the scoop the robot plans into this cup">
+    <details>
+      <summary>What the camera sees of the cups</summary>
+      <p>The outline should sit on the rim of each confirmed cup. If it sits anywhere else, confirm that cup again.</p>
+      <div class="row wrap"><button id="rim-view-refresh">Refresh picture</button></div>
+      <img id="rim-view" class="photo hidden" alt="Table camera picture with each cup's opening outlined">
+    </details>
+    <details id="spoon-size">
+      <summary>Spoon size</summary>
+      <p>These must be measured with a ruler. The robot uses them to keep every part of the spoon clear of the
+        cup's rim; the numbers shown before you measure are only guesses.</p>
+      <label>Bowl of the spoon: length, tip to neck (mm) <input id="sp-bowl_length_mm" type="number" min="1" max="120" step="1"></label>
+      <label>Bowl of the spoon: widest part (mm) <input id="sp-bowl_width_mm" type="number" min="1" max="80" step="1"></label>
+      <label>Bowl of the spoon: how deep it is (mm) <input id="sp-bowl_depth_mm" type="number" min="1" max="40" step="1"></label>
+      <label>Neck behind the bowl: length (mm) <input id="sp-neck_length_mm" type="number" min="1" max="250" step="1"></label>
+      <label>Neck behind the bowl: width (mm) <input id="sp-neck_width_mm" type="number" min="1" max="60" step="1"></label>
+      <label>Tilt of the spoon in the gripper, nose down (degrees) <input id="sp-axis_tilt_deg" type="number" min="-45" max="45" step="1"></label>
+      <div class="row wrap">
+        <label><input type="checkbox" id="sp-measured"> I measured these with a ruler</label>
+        <button id="spoon-size-save" class="primary">Save spoon size</button>
+      </div>
+      <p class="status" id="spoon-size-out"></p>
+    </details>
     <details>
       <summary>Webcam view of the bowls</summary>
       <div class="row wrap">

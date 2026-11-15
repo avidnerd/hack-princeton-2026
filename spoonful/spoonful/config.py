@@ -221,6 +221,22 @@ class FoodCfg(_M):
     bowl_roi: tuple[int, int, int, int] = (0, 0, 1280, 720)
 
 
+class CupCfg(_M):
+    """One container, in the arm's table frame (x forward, y left, z up from the table, mm)."""
+    x_mm: float                                # centre of the opening
+    y_mm: float
+    radius_mm: float                           # inner radius of the opening
+    rim_mm: Optional[float] = None             # height of the rim above the table. None = not measured yet
+    wall_mm: float = 2.0                       # wall thickness at the rim
+    floor_mm: float = 3.0                      # inside bottom, above the table
+    food_below_rim_mm: Optional[float] = None  # how far below the rim the food's surface is (measured). When set,
+                                               # the scoop goes plate.rim.bite_depth_mm under it; when not, as deep
+                                               # as the cup allows. A tall tub can only be scooped near its top.
+    uncertainty_mm: float = 25.0               # how well x, y are known (photo: 10-25; confirmed with the spoon: ~3)
+    confirmed: bool = False                    # a person saw the spoon tip over the centre of the opening and said so
+    source: str = ""                           # "photo" | "confirmed" | "followed"
+
+
 class BowlCfg(_M):
     name: str                                  # "bowl1"; its taught scoop is scoop_<name> unless `scoop` is set
     roi: tuple[int, int, int, int]             # x, y, w, h of the bowl in the plate camera image, 1280x720 coords
@@ -229,6 +245,8 @@ class BowlCfg(_M):
     watch: bool = True                         # False: the plate camera can't see this bowl (set up from a photo):
                                                # never judge it empty from the webcam
     attack: dict = {}                          # how to scoop it (strategy chosen by vision at setup; see scoop_style)
+    cup: Optional["CupCfg"] = None             # the container's geometry; when set, scoops go through the rim-aware
+                                               # staged scoop (brain/rim_scoop.py) and never the saved scoop path
 
 
 class ScoopStyle(_M):
@@ -262,6 +280,63 @@ class SpoonCheckCfg(_M):
     wait_s: float = 4                          # longest the approach waits for the answer
 
 
+class SpoonGeomCfg(_M):
+    """The spoon's bowl and neck, measured with a ruler. Lengths run back from the tip along the spoon."""
+    measured: bool = False                     # False: the numbers below are placeholders; entry is planned with
+                                               # them but the UI and logs say they are unmeasured
+    bowl_length_mm: float = 45.0               # tip to where the bowl narrows into the neck
+    bowl_width_mm: float = 32.0                # widest part of the bowl
+    bowl_depth_mm: float = 8.0                 # how far the underside of the bowl hangs below the spoon's line
+    neck_length_mm: float = 60.0               # neck/handle behind the bowl that can cross the rim
+    neck_width_mm: float = 12.0
+    axis_tilt_deg: float = 0.0                 # spoon line vs the kinematic tool axis (taped spoons sit at an angle)
+
+
+class RimCfg(_M):
+    """Rim-aware staged scoop (brain/rim_scoop.py, arm/cup.py, perception/rim.py)."""
+    enabled: bool = True
+    require_view: bool = True                  # no fresh camera sighting of the opening = no scoop
+    require_confirmed: bool = True             # the cup's centre must have been confirmed with the spoon over it
+    validated_empty: bool = False              # set by hand after the empty-cup hardware check (README): until then
+                                               # every scoop is announced and logged as an unvalidated trial
+    default_rim_mm: float = 60.0               # assumed rim height for a cup that has not been measured (high = safe)
+    clearance_mm: float = 3.0                  # least gap between any part of the spoon and the cup
+    hover_above_rim_mm: float = 25.0           # lowest part of the spoon at SAFE_HOVER
+    align_tol_mm: float = 4.0                  # measured tip vs planned entry point before descending
+    align_max_iters: int = 3
+    align_max_fix_mm: float = 40.0             # total correction of the commanded pose (logged sag: up to ~28 mm)
+    bite_depth_mm: float = 14.0                # how far under the food's surface the spoon tip goes
+    sag_headroom_mm: float = 16.0              # the pivot is only planned where the arm can also command it this
+                                               # much higher (what the sag correction has needed on this arm)
+    align_low_mm: float = 5.0                  # the measured tip may sit this far below the planned height...
+    align_high_mm: float = 10.0                # ...or this far above it (height is settled during the descent)
+    descent_step_mm: float = 16.0
+    descent_settle_s: float = 0.8              # start of each step during which a stall is not judged: on the real
+                                               # arm the joints stick for the first degree of a slow move, which
+                                               # read as a touch in free air (0 = judge from the first instant)
+    spoon_view_required: bool = False          # the camera must also see the spoon over the opening at the hover
+                                               # (perception/rim.spoon_over). False = looked at and logged only.
+    in_cup_stall_retries: int = 0              # a stall with the spoon inside the cup and clear of its walls, in food
+                                               # that is not firm: try that step again this many times before
+                                               # taking it as the bottom. 0 = the first stall ends the descent
+                                               # (on the real arm that stopped every dip at the food's surface)
+    press_deg: float = 3.5                     # settled lag grown this much since the descent began = pressing on
+                                               # something (free-air readings on the real arm reach about 2.9)
+    descent_speed_mm_s: float = 6.0
+    free_air_mm: float = 10.0                  # a stall with the whole spoon above the rim and this far from the walls
+                                               # cannot be the cup: that step is tried again (twice at most)
+    stall_deg: float = 3.0                     # lag growth that counts as resistance during the descent
+    out_contact_deg: float = 6.0               # ...and the lift out of the cup (a faster, bigger joint move)
+    scoop_contact_deg: float = 4.5             # lag growth beyond the settled lag that aborts the in-cup stroke
+    view_max_age_s: float = 2.0                # a camera frame older than this is not a sighting
+    view_valid_s: float = 30.0                 # a sighting may be relied on this long (the arm can hide the cup)
+    min_confidence: float = 0.55
+    moved_tol_mm: float = 6.0                  # the opening is "where it was" within this
+    max_follow_mm: float = 45.0                # a cup that moved further than this is not followed
+    min_axis_ratio: float = 0.2               # opening seen flatter than this: depth can't be judged from it
+    reference_max_age_h: float = 4.0           # the camera's learned view of the cups goes stale after this
+
+
 class TrackCfg(_M):
     enabled: bool = True                       # follow a moved bowl (needs table calibration, see perception/table.py)
     max_shift_mm: float = 150                  # further than this from the taught spot: ask for the bowl back
@@ -282,11 +357,16 @@ class PlateCfg(_M):
     track: TrackCfg = TrackCfg()
     probe: ProbeCfg = ProbeCfg()
     spoon_check: SpoonCheckCfg = SpoonCheckCfg()
+    rim: RimCfg = RimCfg()
     scoop_styles: dict[str, ScoopStyle] = {k: ScoopStyle(**v) for k, v in DEFAULT_SCOOP_STYLES.items()}
     default_texture: str = "soft"              # when neither vision nor the food name says
     look_before_scoop: bool = True             # every bite: pause above the bowl, check the aim with the webcam, follow
                                                # the bowl if it moved (needs "Check aim with camera" done once per bowl)
     explain_attack: bool = True                # say why, on the first bite from each bowl ("Jelly is firm: I'll cut in")
+    food_names: dict[str, str] = {"brown paste": "caramel dip", "peanut butter": "caramel dip",
+                                  "caramel sauce": "caramel dip", "caramel": "caramel dip", "brown sauce": "caramel dip",
+                                  "caramel spread": "caramel dip", "nut butter": "caramel dip"}
+                                               # what the photo calls a food -> what it is on this table
     empty_confirm: int = 2                     # consecutive "empty" answers before a bowl counts as finished
     bowls: list[BowlCfg] = []
 
@@ -336,6 +416,7 @@ class Config(_M):
     esp32: Esp32Cfg = Esp32Cfg()
     food: FoodCfg = FoodCfg()
     plate: PlateCfg = PlateCfg()
+    spoon: SpoonGeomCfg = SpoonGeomCfg()
     app: AppCfg = AppCfg()
     photon: PhotonCfg = PhotonCfg()
     profiles: ProfilesCfg = ProfilesCfg()

@@ -523,6 +523,10 @@ class PlateWatcher:
             except Exception as e:
                 self.error = f"attack plan: {e!r}"[:300]
         a = verify_strategy(plan, texture, b.get("amount"))
+        thick = texture == "thick" or b.get("vision_texture") == "thick" or texture_from_name(b.get("food")) == "thick"
+        if thick and a["strategy"] in ("skim", "ladle"):
+            # A thick food is dug, whatever the close-up suggested: skimming a thick dip only wets the spoon.
+            a = default_strategy("thick", b.get("amount"))
         b["attack"] = a
         return a
 

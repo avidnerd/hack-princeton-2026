@@ -18,6 +18,7 @@ layers, in one place (`Arm._guard`).
 | LISTENING | IDLE | session end / "that's enough" |
 | LISTENING | SCOOPING | bite request: voice "bite", button, UI, or pace offer (auto-pace opted in) |
 | SCOOPING | LIFTING | scoop path done (outside face zone, no permit needed) |
+| SCOOPING | RETREAT | no scoop: the cup was not seen or has no safe entry, the spoon touched the cup, or it felt something above the food |
 | LIFTING | PRE_DELIVERY_HOLD | lift path done, spoon at pre_delivery (outside face zone) |
 | PRE_DELIVERY_HOLD | DELIVERING | gate PERMIT, plus a GO press within go_window_s if gate.require_go (one press per approach) |
 | PRE_DELIVERY_HOLD | RETREAT | no permit for pre_delivery_timeout_s, or retreat_after_s after a back-off |

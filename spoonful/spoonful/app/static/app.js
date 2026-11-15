@@ -418,6 +418,21 @@ connect();
 
 // ---------------------------------------------------------------- plate
 let plateKey = "";
+const cupDraft = {};            // bowl -> { rim, width } typed but not confirmed yet
+let cupBusy = "";               // the bowl whose cup is being confirmed (the arm goes to rest, the camera looks)
+let spoonKey = "";
+const SPOON_FIELDS = ["bowl_length_mm", "bowl_width_mm", "bowl_depth_mm", "neck_length_mm", "neck_width_mm", "axis_tilt_deg"];
+function renderSpoonSize() {
+  const sp = S.setup && S.setup.spoon;
+  if (!sp) return;
+  const key = JSON.stringify(sp);
+  if (key === spoonKey || $("spoon-size").contains(document.activeElement)) return;   // don't overwrite typing
+  spoonKey = key;
+  SPOON_FIELDS.forEach((k) => { $("sp-" + k).value = sp[k]; });
+  $("sp-measured").checked = !!sp.measured;
+  $("spoon-size-out").textContent = sp.measured ? "Saved as measured." : "Not measured yet: these sizes are guesses.";
+  $("spoon-size-out").classList.toggle("bad", !sp.measured);
+}
 function renderPlate() {
   const p = S && S.plate;
   const line = $("plate-line");
@@ -428,14 +443,28 @@ function renderPlate() {
     (next && next.food ? `   ${S.fsm.bowl ? "Now" : "Next"}: ${cap(next.food)}` : "");
   line.classList.remove("hidden");
   $("plate-status").textContent = p.error ? `Vision problem: ${p.error}`
-    : "Check aim with camera lines the spoon up over each bowl. Show aim hovers it there; the arrows move it 5 mm.";
+    : "Show aim hovers the spoon over each bowl; the arrows move it 5 mm. For a cup: centre the spoon over the opening, enter its sizes, then confirm.";
+  renderSpoonSize();
   const idle = S.fsm.state === "IDLE";
   const aim = (S.setup && S.setup.aim) || { running: null, results: {} };
-  const key = JSON.stringify([p.bowls, aim]) + S.fsm.state;
+  const cups = (S.setup && S.setup.cups) || {};
+  const key = JSON.stringify([p.bowls, aim, cups, cupBusy]) + S.fsm.state;
   if (key === plateKey) return;            // don't rebuild while someone is typing
   const active = document.activeElement;
-  if (active && (active.classList.contains("bowl-food") || active.classList.contains("bowl-tex"))) return;
+  if (active && (active.classList.contains("bowl-food") || active.classList.contains("bowl-tex") || active.classList.contains("cup-in"))) return;
   plateKey = key;
+  const cupBlock = (name) => {
+    const c = cups[name] || { line: "", ok: false };
+    const d = cupDraft[name] || {};
+    const busy = cupBusy === name;
+    return `<span class="cup" data-cup="${esc(name)}">
+        <label>Cup height (mm) <input class="cup-in" data-k="rim" type="number" min="1" max="300" step="1" value="${esc(d.rim ?? c.rim_mm ?? "")}"></label>
+        <label>Opening width (mm) <input class="cup-in" data-k="width" type="number" min="1" max="300" step="1" value="${esc(d.width ?? c.width_mm ?? "")}"></label>
+        <button data-confirm="1" ${idle && !cupBusy ? "" : "disabled"}>${busy ? "Confirming" : "Spoon is centred: confirm"}</button>
+        <button class="link" data-preview="1">Preview scoop</button>
+        <span class="status ${c.ok && !busy ? "" : "bad"}">${esc(busy ? "Moving away so the camera can see the cup" : c.line)}</span>
+      </span>`;
+  };
   $("plate-bowls").innerHTML = p.bowls.map((b) => `<div class="bowl-row">
       <b class="${b.empty ? "empty" : ""}">${esc(cap(b.food) || "Unknown food")}</b>
       <span class="meta">${esc([AMOUNT_TEXT[b.amount], STRATEGY_TEXT[b.attack && b.attack.strategy]].filter(Boolean).join(" · "))}</span>
@@ -455,8 +484,45 @@ function renderPlate() {
         <button data-step="0,-5" ${idle ? "" : "disabled"} title="Scoop 5 mm to the arm's right">Right</button>
         <span class="status ${(aim.results[b.name] || {}).state === "problem" ? "bad" : ""}">${esc((aim.results[b.name] || {}).message || "")}</span>
       </span>
+      ${cupBlock(b.name)}
     </div>`).join("");
 }
+function confirmCup(name) {
+  const box = document.querySelector(`.cup[data-cup="${name}"]`);
+  const val = (k) => Number(box.querySelector(`[data-k="${k}"]`).value);
+  const rim_mm = val("rim"), width_mm = val("width");
+  if (!(rim_mm > 0) || !(width_mm > 0)) { toast("Enter the cup's height and the width of its opening, in millimetres."); return; }
+  cupBusy = name;
+  post(`setup/cup/${encodeURIComponent(name)}/confirm`, { rim_mm, width_mm }).then((r) => {
+    cupBusy = ""; plateKey = "";
+    if (r.ok) { delete cupDraft[name]; toast(r.message); showRimView(); }
+  });
+}
+function showRimView() {
+  const img = $("rim-view");
+  img.onerror = () => img.classList.add("hidden");
+  img.onload = () => img.classList.remove("hidden");
+  img.src = "/api/rim/view.jpg?t=" + Date.now();
+}
+function previewScoop(name) {
+  const img = $("cup-preview");
+  img.onerror = () => { img.classList.add("hidden"); toast("The scoop preview isn't available."); };
+  img.onload = () => img.classList.remove("hidden");
+  img.src = `/api/rim/preview/${encodeURIComponent(name)}.png?t=` + Date.now();
+}
+$("plate-bowls").oninput = (e) => {
+  const t = e.target;
+  if (!t.classList.contains("cup-in")) return;
+  const name = t.closest(".cup").dataset.cup;
+  (cupDraft[name] = cupDraft[name] || {})[t.dataset.k] = t.value;
+};
+$("rim-view-refresh").onclick = showRimView;
+$("spoon-size-save").onclick = () => {
+  const body = { measured: $("sp-measured").checked };
+  SPOON_FIELDS.forEach((k) => { body[k] = Number($("sp-" + k).value); });
+  if (SPOON_FIELDS.some((k) => k !== "axis_tilt_deg" && !(body[k] > 0))) { toast("Every spoon size must be more than zero."); return; }
+  post("setup/spoon", body).then((r) => { if (r.ok) { spoonKey = ""; toast("Spoon size saved."); } });
+};
 $("ask-go").onclick = () => {
   const t = $("ask-text").value.trim();
   $("ask-text").blur();                       // give the keyboard back: the GO button types PageDown
@@ -470,6 +536,8 @@ $("plate-bowls").onclick = (e) => {
     post("plate/label", { bowl: t.dataset.set, food: inp.value.trim() }).then(() => { inp.value = ""; plateKey = ""; });
   } else if (t.dataset.bowlbite) post("plate/bite", { bowl: t.dataset.bowlbite });
   else if (t.dataset.camera) post("setup/aim/camera", { bowl: t.closest(".aim").dataset.aim });
+  else if (t.dataset.confirm) confirmCup(t.closest(".cup").dataset.cup);
+  else if (t.dataset.preview) previewScoop(t.closest(".cup").dataset.cup);
   else if (t.dataset.step) {
     const [further_mm, left_mm] = t.dataset.step.split(",").map(Number);
     post("setup/aim", { bowl: t.closest(".aim").dataset.aim, further_mm, left_mm });
