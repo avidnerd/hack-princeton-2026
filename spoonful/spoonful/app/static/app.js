@@ -231,6 +231,10 @@ function renderSetup() {
   chip("s-table-chip", bowls.length ? `Serving ${bowls.length} bowl${bowls.length > 1 ? "s" : ""}` : t.candidates.length ? "Choose bowls" : "No photo yet", bowls.length);
   $("photo-pose").textContent = t.posed ? "Spoon is in place" : "Pose for photo";
   $("photo-pose").disabled = !idle || t.posed;
+  $("photo-pose").classList.toggle("primary", !t.posed);
+  $("phone-qr").classList.toggle("hidden", !t.posed);
+  $("phone-qr-wait").classList.toggle("hidden", t.posed);
+  $("phone-url").classList.toggle("hidden", !t.posed);
   const ph = u.phone;
   if (ph) {
     const qr = $("phone-qr");

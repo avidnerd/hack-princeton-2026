@@ -138,6 +138,8 @@ details > * + * { margin-top: 8px; }
 .step.done .chip { color: var(--arm); }
 .phone-row { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
 .qr { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); flex: none; }
+.qr-wait { width: 150px; height: 150px; display: grid; place-items: center; text-align: center; padding: 14px;
+  background: var(--paper); color: var(--steel); font-size: 14px; }
 .phone-side { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; min-width: 200px; flex: 1; }
 .photo-wrap { position: relative; }
 .photo-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; }

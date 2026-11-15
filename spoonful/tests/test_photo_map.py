@@ -101,6 +101,9 @@ def test_photo_upload_builds_scoops_without_touching(sim_system, tmp_path, monke
     wait_state(s, "IDLE")
     c = TestClient(create_app(s))
     assert c.post("/api/photo/upload", json={"image": data}).status_code == 409     # spoon not posed yet
+    shown = s.setup_state["candidates"]                                  # ...but the bowls are still outlined,
+    assert len(shown) == 2 and all(not k["ok"] and "spoon" in k["why"] and len(k["poly"]) >= 3 for k in shown)
+    assert c.post("/api/setup/bowls", json={"ids": [0, 1]}).status_code == 409   # just not choosable
     assert c.post("/api/photo/pose").status_code == 200
     t0 = time.time()
     while s.arm.busy or time.time() - t0 < 0.5:

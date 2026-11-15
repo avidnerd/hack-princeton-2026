@@ -54,7 +54,7 @@ arm:
     elbow: 10.0
   contact_hold_s: 0.3
   contact_grace_deg: 2.0
-  stop_torque_off_after_s: -1
+  stop_torque_off_after_s: -1.0
   gripper_close_deg: null
   heartbeat_timeout_s: 0.25
   trajectories_dir: data/trajectories
@@ -67,9 +67,10 @@ kinematics:
   base_height_mm: 67.2
   upper_arm_mm: 94.9
   forearm_mm: 90.4
-  tool_mm: 194.8                # wrist axis -> gripper servo face 91.8 + spoon tip 103 past it (ruler, 2026-11-14)
-  tool_offset_mm: 0.0          # the touch fit (246 / -34) put the scoop dip 3 cm under the table: tape flexes
+  tool_mm: 194.8
+  tool_offset_mm: 0.0
   spoon_measured: true
+  face_cyl: null
   sign:
     base: 1.0
     shoulder: -1.0
@@ -109,9 +110,9 @@ face:
   jaw_open_threshold: 0.25
   hysteresis_fraction: 0.7
   yaw_max_deg: 22.0
-  yaw_center_deg: -24.0
+  yaw_center_deg: -25.7
   pitch_max_deg: 20.0
-  pitch_offset_deg: 15.0
+  pitch_offset_deg: 14.6
   presence_hold_s: 0.5
   mouth_open_hold_s: 0.3
   mouth_closed_taken_s: 0.5
@@ -171,6 +172,7 @@ speech:
   enabled: true
 voice:
   requests: false
+  select: true
   enabled: true
   wake: spoonful
   wake_aliases:
@@ -250,6 +252,7 @@ plate:
     max_shift_mm: 150.0
     max_age_s: 60.0
     calib_file: data/table_calib.json
+    table_min_v_px: 380.0
   probe:
     enabled: true
     above_mm: 15.0
@@ -283,6 +286,7 @@ plate:
       wiggle: 2
       contact_extra_deg: 4.0
   default_texture: soft
+  explain_attack: true
   empty_confirm: 2
   bowls:
   - name: bowl1
@@ -293,9 +297,12 @@ plate:
     - 130
     scoop: ''
     label: ''
+    watch: true
+    attack: {}
 app:
   host: 127.0.0.1
   port: 8000
+  phone_link: true
   ws_hz: 10.0
   stream_fps: 15.0
 photon:

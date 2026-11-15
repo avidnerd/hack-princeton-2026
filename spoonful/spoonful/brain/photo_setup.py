@@ -16,12 +16,15 @@ import time
 from ..arm import kinematics as K
 from ..arm.trajectory import plan
 from ..config import ARM_JOINTS, BowlCfg
-from ..perception.photo_map import PHOTO_TIP_MM, PROMPT, analyze_robust, predicted_surface_mm
+from ..perception.photo_map import PROMPT, analyze_robust, predicted_surface_mm
 from . import quick_setup as QS
 
 MAX_PHOTO_PX = 1600
-MIN_TIP_REACH_MM = 80      # the spoon tip must be this far from the base axis for the photo's scale to be reliable
-MAX_TIP_HEIGHT_MM = 90     # and this close to the table, so its position in the photo isn't shifted by perspective
+MIN_TIP_REACH_MM = 120     # the spoon tip must be this far from the base axis for the photo's scale to be reliable
+MAX_TIP_HEIGHT_MM = 60    # and this close to the table, so its position in the photo isn't shifted by perspective
+
+
+NOT_PLACED = "The spoon wasn't in place for this photo. Press \"Pose for photo\", then retake it."
 
 
 class SetupProblem(RuntimeError):
@@ -80,6 +83,11 @@ def outline(img, box) -> list[list[int]]:
     return [[int(px / k + cx0), int(py / k + cy0)] for px, py in c]
 
 
+def spoon_placed(tip) -> bool:
+    """Is the spoon tip where a photo can use it as a reference: out in front of the base and near the table?"""
+    return math.hypot(tip[0], tip[1]) >= MIN_TIP_REACH_MM and tip[2] <= MAX_TIP_HEIGHT_MM
+
+
 def _public(c: dict) -> dict:
     return {k: v for k, v in c.items() if not k.startswith("_")}
 
@@ -104,11 +112,12 @@ def find_bowls(sys, img) -> list[dict]:
         raise SetupProblem("Set your mouth position first (step 1).")
     kin = sys.cfg.kinematics
     tip = K.fk(kin, sys.arm.state.deg)
-    if math.hypot(tip[0], tip[1]) < MIN_TIP_REACH_MM or tip[2] > MAX_TIP_HEIGHT_MM:
-        raise SetupProblem("Press \"Pose for photo\" first, then retake the photo.")
+    placed = spoon_placed(tip)       # without it the bowls can be outlined but not located: shown, not choosable
     try:
         m = analyze_robust(img, lambda data: sys.plate.image_generate(data, PROMPT), tip_mm=(tip[0], tip[1]))
     except Exception as e:
+        if not placed:
+            raise SetupProblem(NOT_PLACED) from e
         raise SetupProblem(f"Couldn't read the photo: {e}") from e
 
     QS.LIMITS = sys.cfg.arm.soft_limits_deg
@@ -136,10 +145,14 @@ def find_bowls(sys, img) -> list[dict]:
                      _crop=cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes())
         except Exception as e:
             c.update(ok=False, why="Too close to your face" if "face" in str(e) else "Out of reach")
+        if not placed:
+            c.update(ok=False, why="Retake with the spoon in place")
         found.append(c)
     sys.setup_state["candidates"] = found
     sys.log.event("photo_bowls", detail_found=[_public(c) | {"poly": len(c["poly"])} for c in found],
                   mm_per_px=round(m["mm_per_px"], 3))
+    if not placed:
+        raise SetupProblem(NOT_PLACED)
     if not any(c["ok"] for c in found):
         raise SetupProblem("No bowls the arm can reach in this photo. Move them closer and retake it."
                            if found else "No bowls found in this photo. Retake it from straight above.")
@@ -187,7 +200,7 @@ def status(sys) -> dict:
     st = sys.setup_state
     kin = sys.cfg.kinematics
     tip = K.fk(kin, sys.arm.state.deg) if sys.arm.state.ok else None
-    posed = bool(tip) and math.dist(tip, PHOTO_TIP_MM) < 25
+    posed = bool(tip) and sys.arm.torque_on and spoon_placed(tip)
     return {
         "mouth": {"set": sys.lib.has("mouth_nominal") and sys.lib.has("pre_delivery"), "at": st.get("mouth_at"),
                   "released": not sys.arm.torque_on},

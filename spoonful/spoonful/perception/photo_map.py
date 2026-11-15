@@ -16,7 +16,7 @@ import base64
 import math
 from typing import Callable, Optional
 
-PHOTO_TIP_MM = (170.0, 0.0, 15.0)      # where the arm holds the spoon tip for the photo (in front of the base)
+PHOTO_TIP_MM = (170.0, 0.0, 30.0)      # where the arm holds the spoon tip for the photo (in front of the base)
 PRIOR_BOWL_MM = 55.0                   # typical cup/bowl depth when nothing else is known
 FILL = {"full": 0.85, "half": 0.5, "low": 0.2, "empty": 0.0}
 
