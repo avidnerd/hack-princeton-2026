@@ -82,7 +82,9 @@ class AimCheck:
 
     def forget(self) -> None:
         """The table was mapped again (the laptop or the bowls may have moved)."""
-        self.jacobians, self.results = {}, {}
+        self.jacobians = {}
+        if not self.running:
+            self.results = {}
 
     def status(self) -> dict:
         return {"running": self.running, "results": self.results, "calibrated": sorted(self.jacobians)}
@@ -104,6 +106,8 @@ class AimCheck:
         return QS._at(kin, q, math.hypot(px, py), z + photo_setup.AIM_ABOVE_MM + dz)
 
     def _tip_px(self) -> np.ndarray:
+        if self.s.plate.frame_fn() is None:
+            raise AimProblem("No picture of the table. Is the phone still sending?")
         for _ in range(2):
             p = self.s.plate.point_spoon_tip()
             if p is not None and 20 <= p[0] <= 1260 and 20 <= p[1] <= 700:
@@ -237,7 +241,7 @@ class AimCheck:
 
     def _check(self, bowl: str) -> None:
         s = self.s
-        res = self.results[bowl]
+        res = self.results.setdefault(bowl, {})
         res.update(state="checking", message="Looking at the spoon")
         self.calibrate(bowl)
         f, l = self.look(bowl)
@@ -272,10 +276,11 @@ class AimCheck:
                 try:
                     self._check(bowl)
                 except (AimProblem, photo_setup.SetupProblem) as e:
-                    self.results[bowl].update(state="problem", message=str(e))
+                    self.results.setdefault(bowl, {}).update(state="problem", message=str(e))
                 except Exception as e:
                     s.log.event("aim_check_failed", detail_error=repr(e)[:200])
-                    self.results[bowl].update(state="problem", message="The check failed. Use Show aim and the arrows.")
+                    self.results.setdefault(bowl, {}).update(state="problem",
+                                                             message="The check failed. Use Show aim and the arrows.")
                 if self._abort.is_set() or s.fsm.state.value != "IDLE":
                     break
         finally:

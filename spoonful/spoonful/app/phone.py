@@ -58,7 +58,8 @@ class Aim(BaseModel):
 class PhoneCamera:
     """The latest frame streamed from the phone."""
 
-    FRESH_S = 1.5
+    FRESH_S = 3.0               # Wi-Fi stalls for a second now and then
+    GONE_S = 20.0               # after this long without a frame the phone is treated as put away
 
     def __init__(self):
         self.frame = None                   # BGR image
@@ -79,6 +80,11 @@ class PhoneCamera:
     @property
     def live(self) -> bool:
         return self.frame is not None and time.monotonic() - self.at <= self.FRESH_S
+
+    @property
+    def in_use(self) -> bool:
+        """The phone is the table camera: it is sending, or stopped only moments ago."""
+        return self.frame is not None and time.monotonic() - self.at <= self.GONE_S
 
     def image(self):
         return self.frame if self.live else None

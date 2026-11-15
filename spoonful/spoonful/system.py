@@ -157,9 +157,10 @@ class System:
         (aim_check's image Jacobian) is dropped."""
         img = self.phone_camera.image()
         view = "phone"
-        if img is None:
+        if img is None and not self.phone_camera.in_use:
             f = (self.plate_camera or self.camera).latest()
             img, view = (f.image if f else None), "laptop"
+        # (a phone that stalls for a moment gives no picture; it is not swapped for a different camera's view)
         if view != self._table_view:
             if self._table_view and hasattr(self, "aim_check"):
                 self.aim_check.forget()

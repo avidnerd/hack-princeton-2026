@@ -120,8 +120,10 @@ def test_phone_live_camera_becomes_the_table_view(app_system):
     assert view.shape == (540, 960, 3) and abs(int(view[10, 10, 0]) - 200) < 8      # the phone's picture
     assert s.aim_check.jacobians == {}                                    # a new view: what was learned is dropped
 
-    s.phone_camera.at -= 5                                                # the phone stops sending
+    s.phone_camera.at -= 5                                                # the phone stalls for a few seconds
     assert not s.phone_camera.live
+    assert s.table_frame() is None                                        # no picture, rather than another camera's
+    s.phone_camera.at -= 30                                               # the phone has been put away
     assert s.table_frame().shape == laptop_view.shape                     # back to the laptop's camera
 
 
