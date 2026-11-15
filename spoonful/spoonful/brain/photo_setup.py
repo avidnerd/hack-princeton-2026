@@ -16,12 +16,11 @@ import time
 from ..arm import kinematics as K
 from ..arm.trajectory import plan
 from ..config import ARM_JOINTS, BowlCfg
-from ..perception.photo_map import PROMPT, analyze_robust, predicted_surface_mm
+from ..perception.photo_map import PHOTO_TIP_MM, PROMPT, analyze_robust, predicted_surface_mm
 from . import quick_setup as QS
 
 MAX_PHOTO_PX = 1600
-MIN_TIP_REACH_MM = 120     # the spoon tip must be this far from the base axis for the photo's scale to be reliable
-MAX_TIP_HEIGHT_MM = 60    # and this close to the table, so its position in the photo isn't shifted by perspective
+PLACED_WITHIN_MM = 45      # how close to the photo pose the measured spoon tip must be to count as in place
 
 
 NOT_PLACED = "The spoon wasn't in place for this photo. Press \"Pose for photo\", then retake it."
@@ -84,8 +83,8 @@ def outline(img, box) -> list[list[int]]:
 
 
 def spoon_placed(tip) -> bool:
-    """Is the spoon tip where a photo can use it as a reference: out in front of the base and near the table?"""
-    return math.hypot(tip[0], tip[1]) >= MIN_TIP_REACH_MM and tip[2] <= MAX_TIP_HEIGHT_MM
+    """Is the spoon tip at the photo pose (within the arm's sag of it)? The photo uses it as its reference point."""
+    return math.dist(tip, PHOTO_TIP_MM) <= PLACED_WITHIN_MM
 
 
 def _public(c: dict) -> dict:

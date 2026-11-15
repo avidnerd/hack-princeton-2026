@@ -67,8 +67,8 @@ kinematics:
   base_height_mm: 67.2
   upper_arm_mm: 94.9
   forearm_mm: 90.4
-  tool_mm: 194.8
-  tool_offset_mm: 0.0
+  tool_mm: 220.0
+  tool_offset_mm: -35.0
   spoon_measured: true
   face_cyl: null
   sign:
@@ -83,7 +83,7 @@ kinematics:
     wrist_pitch: -3.6
   face_zone:
     x:
-    - 270.0
+    - 290.0
     - 600.0
     y:
     - -200.0
