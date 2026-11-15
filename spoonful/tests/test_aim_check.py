@@ -34,8 +34,21 @@ def test_solve_offset_recovers_a_known_error():
     f, l = solve_offset(project(tip), project(bowl), tip[2], CAM @ out, CAM @ left, CAM @ np.array([0, 0, 1.0]))
     want = bowl - np.array([tip[0], tip[1], 0])
     assert f == pytest.approx(want @ out, abs=0.01) and l == pytest.approx(want @ left, abs=0.01)
-    with pytest.raises(AimProblem):                                           # camera looking straight down the arm
-        solve_offset([0, 0], [5, 5], 50, [1.0, 0.0], [1.0, 0.001], [0, -1])
+    with pytest.raises(AimProblem):                                           # the spoon doesn't move in the picture
+        solve_offset([0, 0], [5, 5], 50, [0.01, 0.0], [0.0, 0.01], [0, -1])
+
+
+def test_low_camera_only_corrects_the_direction_it_can_see():
+    """A camera at table height: side to side is clear, depth is squashed to almost nothing. A few pixels of error
+    in where the dish's base is must not become centimetres of depth 'correction'."""
+    low = np.array([[0.02, -1.9, 0.0], [0.06, 0.0, -1.8]])                   # depth barely shows
+    tip, bowl = np.array([210.0, 0.0, 95.0]), np.array([210.0, -14.0, 0.0])   # truly 14 mm to the right, same depth
+    out, left, up = low @ np.array([1.0, 0, 0]), low @ np.array([0, 1.0, 0]), low @ np.array([0, 0, 1.0])
+    base_px = low @ bowl + np.array([0.0, 6.0])                              # the detector is 6 px off vertically
+    f, l = solve_offset(low @ tip, base_px, tip[2], out, left, up)
+    assert l == pytest.approx(-14, abs=1.0) and abs(f) < 3                   # sideways right; depth left alone
+    f_naive, _ = np.linalg.solve(np.column_stack([out, left]), base_px - (low @ tip - up * tip[2]))
+    assert abs(f_naive) > 60                                                 # what trusting the weak axis would do
 
 
 @pytest.fixture
@@ -94,7 +107,8 @@ def test_wild_camera_answer_is_not_applied(aim_system):
     far = np.array([before[0] + 90, before[1] + 60, 0.0])                    # 11 cm away: the photo and camera disagree
     s.plate.image_generate = lambda jpg, prompt: [dish_at(far)]
     res = _run(s)
-    assert res["state"] == "problem" and "Retake" in res["message"]
+    assert res["state"] == "problem" and "can't be right" in res["message"]
+    assert not s.aim_check.ready("bowl1")                                 # so it won't steer this bowl's scoops either
     assert scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses) == before
 
 

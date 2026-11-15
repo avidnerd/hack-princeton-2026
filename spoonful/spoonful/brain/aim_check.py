@@ -53,14 +53,26 @@ class AimProblem(RuntimeError):
     """The check could not be done; the message says why. The scoop is left as it was."""
 
 
+WEAK_AXIS = 0.2            # a table direction the camera sees this much less strongly than the other is not trusted
+
+
 def solve_offset(tip_px, base_px, tip_height_mm: float, j_further, j_left, j_up) -> tuple[float, float]:
     """Pure. (further_mm, left_mm) to move the tip so it is directly above the bowl's base.
-    j_*: pixels the tip moves per mm of motion in that direction (2-vectors)."""
+    j_*: pixels the tip moves per mm of motion in that direction (2-vectors).
+
+    A camera near table height barely sees motion toward or away from itself: a few pixels of error there would
+    turn into centimetres. When one table direction is that weak, only the direction the camera sees well is
+    corrected, and the other is left where the table photo put it."""
     under_tip = np.asarray(tip_px, float) - np.asarray(j_up, float) * tip_height_mm     # the table point below the tip
     J = np.column_stack([j_further, j_left]).astype(float)
-    if abs(np.linalg.det(J)) < 1e-3 or np.linalg.cond(J) > 25:
-        raise AimProblem("From this angle the webcam can't tell which way the spoon needs to move.")
-    d = np.linalg.solve(J, np.asarray(base_px, float) - under_tip)
+    err = np.asarray(base_px, float) - under_tip
+    U, S, Vt = np.linalg.svd(J)
+    if S[0] < 0.05:
+        raise AimProblem("The spoon barely moves in the camera's picture.")
+    if S[1] < WEAK_AXIS * S[0]:
+        d = Vt[0] * (U[:, 0] @ err) / S[0]
+    else:
+        d = np.linalg.solve(J, err)
     return float(d[0]), float(d[1])
 
 
@@ -75,10 +87,7 @@ class AimCheck:
 
     # ------------------------------------------------------------------ what was learned about the camera
     def _jacobian(self, bowl: str) -> Optional[np.ndarray]:
-        """This bowl's, or another bowl's on the same table (same camera, nearby)."""
-        if bowl in self.jacobians:
-            return self.jacobians[bowl]
-        return next(iter(self.jacobians.values()), None)
+        return self.jacobians.get(bowl)
 
     def forget(self) -> None:
         """The table was mapped again (the laptop or the bowls may have moved)."""
@@ -251,8 +260,9 @@ class AimCheck:
             res.update(state="ok", message=f"Lined up (within {off:.0f} mm)")
             return
         if off > MAX_FIX_MM:
-            res.update(state="problem", message=f"The webcam sees the spoon {off / 10:.0f} cm from the bowl. "
-                                                "Retake the table photo.")
+            del self.jacobians[bowl]                    # not believable: this camera view may not steer this bowl
+            res.update(state="problem", message=f"The camera puts the spoon {off / 10:.0f} cm from the bowl, which "
+                                                "can't be right. Scooping where the photo put it.")
             return
         res.update(message=f"Off by {off:.0f} mm. Correcting")
         photo_setup.move_scoop(s, bowl, f, l)
@@ -261,10 +271,10 @@ class AimCheck:
         off2 = math.hypot(f2, l2)
         s.log.event("aim_check", detail_bowl=bowl, after_fix=True, further_mm=round(f2, 1), left_mm=round(l2, 1))
         if off2 < off - 2:
-            res.update(state="ok" if off2 <= 2 * GOOD_MM else "problem",
-                       message=f"Corrected by {off:.0f} mm; now within {off2:.0f} mm")
+            res.update(state="ok", message=f"Corrected by {off:.0f} mm; now within {off2:.0f} mm")
         else:                                           # the correction didn't help: the camera was wrong, undo it
             photo_setup.move_scoop(s, bowl, -f, -l)
+            del self.jacobians[bowl]
             res.update(state="problem", message="Couldn't confirm the aim from this camera angle. "
                                                 "Use Show aim and the arrows.")
 
@@ -276,8 +286,10 @@ class AimCheck:
                 try:
                     self._check(bowl)
                 except (AimProblem, photo_setup.SetupProblem) as e:
+                    self.jacobians.pop(bowl, None)
                     self.results.setdefault(bowl, {}).update(state="problem", message=str(e))
                 except Exception as e:
+                    self.jacobians.pop(bowl, None)
                     s.log.event("aim_check_failed", detail_error=repr(e)[:200])
                     self.results.setdefault(bowl, {}).update(state="problem",
                                                              message="The check failed. Use Show aim and the arrows.")

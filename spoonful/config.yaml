@@ -308,7 +308,7 @@ plate:
     watch: false
     attack:
       strategy: skim
-      why: Applesauce is soft and spreadable, ideal for a shallow skim.
+      why: Applesauce is soft and spreadable, ideal for a shallow skimming motion.
       source: vision
       entry_angle_deg: 30.0
       depth_mm: 5.0
@@ -327,13 +327,13 @@ plate:
     watch: false
     attack:
       strategy: stab_and_saw
-      why: Jelly is firm and requires cutting to scoop effectively.
+      why: The jelly is a firm, cohesive gel requiring cutting to scoop.
       source: vision
-      entry_angle_deg: 60.0
+      entry_angle_deg: 45.0
       depth_mm: 10.0
       saw_strokes: 2
-      speed: 0.5
-      drag_mm: 10.0
+      speed: 0.6
+      drag_mm: 15.0
       contact_extra_deg: 4.0
 app:
   host: 127.0.0.1
