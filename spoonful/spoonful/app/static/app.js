@@ -249,6 +249,12 @@ function renderSetup() {
       out.classList.toggle("bad", ph.status === "problem");
     }
   }
+  const live = !!(ph && ph.live);
+  if (live !== !$("phone-live").classList.contains("hidden")) {
+    $("phone-live").classList.toggle("hidden", !live);
+    $("phone-live-img").src = live ? "/phone/stream?t=" + Date.now() : "";
+  }
+  if (live) $("phone-live-text").textContent = `Phone camera is live (${ph.fps} pictures a second). The robot uses it to find the spoon and the bowls.`;
   if (t.photo_at) {
     const key = String(t.photo_at) + t.candidates.length;
     if (key !== photoKey) {                 // a new photo (or its bowls just arrived): start from the suggested choice

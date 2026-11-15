@@ -83,8 +83,10 @@ class System:
         self.plate_camera = None
         if cfg.plate.enabled and cfg.plate.camera_index >= 0 and opts.camera:
             self.plate_camera = Camera(cfg.camera.model_copy(update={"index": cfg.plate.camera_index}))
-        cam = self.plate_camera or self.camera
-        self.plate = PlateWatcher(cfg, lambda: (lambda f: f.image if f else None)(cam.latest()),
+        from .app.phone import PhoneCamera
+        self.phone_camera = PhoneCamera()
+        self._table_view = ""
+        self.plate = PlateWatcher(cfg, self.table_frame,
                                   active_fn=lambda: self.fsm.state.value == "LISTENING")   # only during a session
         self.fsm.plate = self.plate
         from .brain.aim_check import AimCheck
@@ -148,6 +150,21 @@ class System:
                 return
         if cmd:
             self.fsm.post(cmd, source="voice")
+
+    def table_frame(self):
+        """The picture used to find the spoon and the bowls: the phone's live camera when it is streaming, otherwise
+        the plate camera or the laptop webcam. When the view changes, what was learned about the old view
+        (aim_check's image Jacobian) is dropped."""
+        img = self.phone_camera.image()
+        view = "phone"
+        if img is None:
+            f = (self.plate_camera or self.camera).latest()
+            img, view = (f.image if f else None), "laptop"
+        if view != self._table_view:
+            if self._table_view and hasattr(self, "aim_check"):
+                self.aim_check.forget()
+            self._table_view = view
+        return img
 
     def voice_hint(self) -> str:
         """The foods on the table, as a plain list. No wake word and no command in it: on noise the recogniser can

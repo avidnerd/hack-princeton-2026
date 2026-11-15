@@ -51,7 +51,7 @@ def create_app(sys: System) -> FastAPI:
     app.state.sys = sys
     app.state.timeline = []
     app.include_router(router)
-    link = PhoneLink(sys.cfg.app.port)
+    link = PhoneLink(sys.cfg.app.phone_port)
     app.state.phone = link
     app.include_router(make_router(sys, link))
     app.add_middleware(LocalOnly, allows=link.allows)
@@ -108,7 +108,8 @@ def create_app(sys: System) -> FastAPI:
             while True:
                 snap = snapshot(sys)
                 snap["timeline"] = app.state.timeline[-20:]
-                snap["setup"]["phone"] = link.state()
+                snap["setup"]["phone"] = {**link.state(), "live": sys.phone_camera.live,
+                                          "fps": round(sys.phone_camera.fps, 1)}
                 await sock.send_text(json.dumps(snap, default=str))
                 await asyncio.sleep(period)
         except (WebSocketDisconnect, RuntimeError):

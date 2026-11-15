@@ -78,7 +78,8 @@
 
       <li class="step" id="s-step-2">
         <div class="step-head"><h3>The table</h3><span class="chip" id="s-table-chip">Not mapped</span></div>
-        <p>Pose the arm, scan the code and take one photo from straight above. Then choose the bowls you want.</p>
+        <p>Pose the arm, scan the code and take one photo from straight above. Then choose the bowls you want.
+          Afterwards, stand the phone where it sees the spoon and the bowls and start its live camera.</p>
         <div class="phone-row">
           <img id="phone-qr" class="qr hidden" alt="QR code that opens the photo page on your phone" width="150" height="150">
           <p class="qr qr-wait" id="phone-qr-wait">The code appears when the spoon is in place</p>
@@ -87,6 +88,10 @@
             <p class="status" id="photo-out">Waiting for a photo</p>
             <p class="mono" id="phone-url"></p>
           </div>
+        </div>
+        <div class="hidden" id="phone-live">
+          <p class="status" id="phone-live-text"></p>
+          <img id="phone-live-img" class="photo" alt="Live view from the phone">
         </div>
         <div class="photo-wrap hidden" id="photo-wrap">
           <img id="photo-img" class="photo" alt="The table photo">

@@ -116,9 +116,9 @@ face:
   jaw_open_threshold: 0.25
   hysteresis_fraction: 0.7
   yaw_max_deg: 22.0
-  yaw_center_deg: -26.8
+  yaw_center_deg: -26.1
   pitch_max_deg: 20.0
-  pitch_offset_deg: 18.3
+  pitch_offset_deg: 18.2
   presence_hold_s: 0.5
   mouth_open_hold_s: 0.3
   mouth_closed_taken_s: 0.5
@@ -178,6 +178,7 @@ speech:
   enabled: true
 voice:
   requests: false
+  hint: false
   select: true
   enabled: true
   wake: spoonful
@@ -292,6 +293,7 @@ plate:
       wiggle: 2
       contact_extra_deg: 4.0
   default_texture: soft
+  look_before_scoop: true
   explain_attack: true
   empty_confirm: 2
   bowls:
@@ -306,9 +308,9 @@ plate:
     watch: false
     attack:
       strategy: skim
-      why: Applesauce is soft and spreadable, ideal for a shallow surface skim.
+      why: Applesauce is soft and spreadable, ideal for a shallow skimming motion.
       source: vision
-      entry_angle_deg: 25.0
+      entry_angle_deg: 30.0
       depth_mm: 5.0
       saw_strokes: 0
       speed: 0.8
@@ -325,7 +327,7 @@ plate:
     watch: false
     attack:
       strategy: stab_and_saw
-      why: The jelly is firm and requires cutting to scoop effectively.
+      why: The honeydew jelly is a firm gel requiring cutting to scoop.
       source: vision
       entry_angle_deg: 60.0
       depth_mm: 10.0

@@ -99,3 +99,35 @@ def test_nudge_moves_the_scoop_and_shows_the_new_aim(app_system):
     assert tip[2] > K.fk(kin, min(s.lib.items["scoop_bowl1"].poses, key=lambda q: K.fk(kin, q)[2]))[2] + 40
     assert laptop.post("/api/setup/aim", json={"bowl": "bowl1", "further_mm": 80}).status_code == 409   # too far
     assert laptop.post("/api/setup/aim", json={"bowl": "bowl9"}).status_code == 409
+
+
+def test_phone_live_camera_becomes_the_table_view(app_system):
+    import numpy as np
+    s, app, link = app_system
+    phone, laptop = TestClient(app, client=("192.168.1.50", 50000)), TestClient(app)
+    assert link.url.startswith("https://")                                # live camera needs a secure page
+    laptop_view = s.table_frame()
+    assert not s.phone_camera.live and laptop_view is not None
+
+    s.aim_check.jacobians["bowl1"] = np.eye(3, 2)                         # learned through the laptop's view
+    pic = np.full((540, 960, 3), 90, np.uint8)
+    pic[:, :480] = 200
+    r = phone.post(f"/api/phone/frame/{link.token}", content=cv2.imencode(".jpg", pic)[1].tobytes())
+    assert r.status_code == 200 and s.phone_camera.live
+    assert phone.post("/api/phone/frame/wrongtoken", content=b"x").status_code == 403
+    assert phone.get("/phone/stream").status_code == 403                  # the phone can send, not watch
+    view = s.table_frame()
+    assert view.shape == (540, 960, 3) and abs(int(view[10, 10, 0]) - 200) < 8      # the phone's picture
+    assert s.aim_check.jacobians == {}                                    # a new view: what was learned is dropped
+
+    s.phone_camera.at -= 5                                                # the phone stops sending
+    assert not s.phone_camera.live
+    assert s.table_frame().shape == laptop_view.shape                     # back to the laptop's camera
+
+
+def test_certificate_is_made_once(tmp_path):
+    from spoonful.app.phone import ensure_cert
+    cert, key = ensure_cert(tmp_path)
+    first = cert.read_bytes()
+    assert b"BEGIN CERTIFICATE" in first and b"PRIVATE KEY" in key.read_bytes()
+    assert ensure_cert(tmp_path)[0].read_bytes() == first

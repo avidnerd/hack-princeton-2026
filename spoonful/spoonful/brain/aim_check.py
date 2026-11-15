@@ -9,7 +9,9 @@ Once per bowl (calibrate, about 30 s):
   kept only while the app runs, because it is wrong as soon as the laptop is moved.
 
 Every look (about 2 s, one webcam frame):
-  Find the spoon tip and the centre of the bowl's base (where it rests on the table). The tip is at a known height;
+  Find the spoon tip, and a box around every dish. (Boxes come back tight and repeatable; asking for a single
+  point on a dish does not.) The dish is the one whose food matches, or failing that the one the spoon is hovering
+  over; the centre of its base is taken from the bottom of its box. The tip is at a known height;
   subtracting that height's worth of pixel shift gives the table point directly under the tip. Its distance from
   the bowl's base, turned back into millimetres with the Jacobian, is how far the scoop is off.
 
@@ -39,12 +41,12 @@ GOOD_MM = 7                # within this the aim is confirmed
 MIN_SHIFT_PX = 4           # a 20 mm move must show up at least this much in the picture
 SETTLE_S = 0.7
 
-CUP_PROMPT = (
-    "In this picture a small robot arm holds a spoon near a cup or bowl of {food}. Point to that container. Answer "
-    "only JSON {{\"base\": [y, x], \"opening\": [y, x]}}: \"base\" is the centre of its bottom, where it rests on the "
-    "table; \"opening\" is the centre of its open top. Coordinates normalised to 0-1000. Use null for a point you "
-    "cannot see clearly."
+DISHES_PROMPT = (
+    "Find every cup, bowl or tray of food on the table in this picture. For each one return {\"food\": 1-3 lowercase "
+    "words, \"box_2d\": [ymin, xmin, ymax, xmax]} with a tight box around the whole container, coordinates normalised "
+    "to 0-1000. Do not include the robot or the spoon. Answer only a JSON list."
 )
+BASE_UP = 0.08             # the centre of a dish's base sits about this fraction of its box height above the box bottom
 
 
 class AimProblem(RuntimeError):
@@ -108,19 +110,36 @@ class AimCheck:
                 return np.array(p, float)
         raise AimProblem("The webcam can't see the spoon tip here.")
 
-    def _bowl_px(self, food: str) -> np.ndarray:
+    def _dishes(self) -> list[dict]:
+        """Every dish the camera sees: [{"food", "base": px of the centre of its base, "x": px centre}]."""
         import cv2
         img = self.s.plate.frame_fn()
         if img is None:
-            raise AimProblem("No webcam picture.")
+            raise AimProblem("No camera picture of the table.")
         jpg = cv2.imencode(".jpg", cv2.resize(img, (1280, 720)), [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
-        d = self.s.plate.image_generate(jpg, CUP_PROMPT.format(food=food or "food"))
-        if isinstance(d, list) and d:
-            d = d[0]
-        b = d.get("base") if isinstance(d, dict) else None
-        if not (isinstance(b, (list, tuple)) and len(b) == 2):
-            raise AimProblem(f"The webcam can't see the {food or 'bowl'} clearly.")
-        return np.array([float(b[1]) * 1.28, float(b[0]) * 0.72])
+        d = self.s.plate.image_generate(jpg, DISHES_PROMPT)
+        if isinstance(d, dict):
+            d = d.get("dishes") or d.get("items") or [d]
+        out = []
+        for b in d if isinstance(d, list) else []:
+            box = b.get("box_2d") if isinstance(b, dict) else None
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
+                continue
+            y0, x0, y1, x1 = (float(v) for v in box)
+            x = (x0 + x1) / 2 * 1.28
+            out.append({"food": str(b.get("food") or ""), "x": x,
+                        "base": np.array([x, (y1 - BASE_UP * (y1 - y0)) * 0.72])})
+        return out
+
+    @staticmethod
+    def pick_dish(dishes: list[dict], food: str, tip_px) -> Optional[dict]:
+        """Pure. The dish for this food: the only one whose name matches, else the one the spoon is hovering over."""
+        from ..perception.plate import match_food
+        named = [d for d in dishes if food and match_food(d["food"], {"it": food})]
+        if len(named) == 1:
+            return named[0]
+        pool = named or dishes
+        return min(pool, key=lambda d: abs(d["x"] - tip_px[0])) if pool else None
 
     def look(self, bowl: str) -> tuple[float, float]:
         """With the spoon hovering over the bowl: (further_mm, left_mm) from the spoon to the bowl, from one glance."""
@@ -129,8 +148,12 @@ class AimCheck:
             raise AimProblem("The camera hasn't been checked for this bowl yet.")
         food = self.s.plate.food_of(bowl) or "bowl"
         with ThreadPoolExecutor(max_workers=2) as ex:                    # the two questions at the same time
-            tip_f, bowl_f = ex.submit(self._tip_px), ex.submit(self._bowl_px, food)
-            tip, base = tip_f.result(), bowl_f.result()
+            tip_f, dishes_f = ex.submit(self._tip_px), ex.submit(self._dishes)
+            tip, dishes = tip_f.result(), dishes_f.result()
+        dish = self.pick_dish(dishes, food, tip)
+        if dish is None:
+            raise AimProblem(f"The camera can't see the {food}.")
+        base = dish["base"]
         height = float(K.fk(self.s.cfg.kinematics, self.s.arm.state.deg)[2])
         return solve_offset(tip, base, height, J[0], J[1], J[2])
 

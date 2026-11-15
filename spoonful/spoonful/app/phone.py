@@ -1,11 +1,17 @@
-"""Phone link: take the overhead photo on a phone and have it appear on the laptop.
+"""Phone link: the phone as the robot's camera for the table.
 
-The laptop serves one small page to the phone (same Wi-Fi). The page opens the phone's camera, shrinks the photo
-and posts it back; the Setup screen shows it and maps the table straight away.
+The laptop serves one small page to the phone (same Wi-Fi). From it the phone can
+  - take the overhead table photo, which appears on the Setup screen and is mapped straight away, and
+  - stream its camera live: the laptop shows the view and uses it to find the spoon and the bowls (aim check, the
+    look before every scoop). The laptop's own webcam stays the face-safety camera: it is wired, so a Wi-Fi hiccup
+    can't stall or mislead the check that guards the diner's face.
 
-Opening the server to the local network must not open the robot to it. LocalOnly lets other devices reach exactly
-two URLs, both carrying a token that is new each run and only shown on the laptop (as a QR code): the phone page and
-the photo upload. Everything else (controls, camera stream, WebSocket) answers only to the laptop itself.
+A phone browser only allows live camera access on a secure page, so the phone page is served over HTTPS on its own
+port with a certificate made on this machine (the phone shows a warning once; the link is still encrypted).
+
+Opening a port to the local network must not open the robot to it. LocalOnly lets other devices reach exactly the
+phone page and its two uploads, each carrying a token that is new every run and only shown on the laptop (as a QR
+code). Everything else (controls, camera stream, WebSocket) answers only to the laptop itself.
 """
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from ..brain import photo_setup
@@ -49,6 +55,60 @@ class Aim(BaseModel):
     left_mm: float = 0
 
 
+class PhoneCamera:
+    """The latest frame streamed from the phone."""
+
+    FRESH_S = 1.5
+
+    def __init__(self):
+        self.frame = None                   # BGR image
+        self.at = 0.0                       # time.monotonic() when it arrived
+        self.count = 0
+        self.fps = 0.0
+        self._window = (time.monotonic(), 0)
+
+    def put(self, img) -> None:
+        now = time.monotonic()
+        self.frame, self.at = img, now
+        self.count += 1
+        t0, n0 = self._window
+        if now - t0 >= 1.0:
+            self.fps = (self.count - n0) / (now - t0)
+            self._window = (now, self.count)
+
+    @property
+    def live(self) -> bool:
+        return self.frame is not None and time.monotonic() - self.at <= self.FRESH_S
+
+    def image(self):
+        return self.frame if self.live else None
+
+
+def ensure_cert(directory: Path) -> tuple[Path, Path]:
+    """A self-signed certificate for the phone page, made once and reused."""
+    cert, key = directory / "phone_cert.pem", directory / "phone_key.pem"
+    if cert.exists() and key.exists():
+        return cert, key
+    import datetime
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    k = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Spoonful")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    c = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(k.public_key())
+         .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+         .not_valid_after(now + datetime.timedelta(days=365))
+         .add_extension(x509.SubjectAlternativeName([x509.DNSName("spoonful.local")]), critical=False)
+         .sign(k, hashes.SHA256()))
+    directory.mkdir(parents=True, exist_ok=True)
+    cert.write_bytes(c.public_bytes(serialization.Encoding.PEM))
+    key.write_bytes(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                    serialization.NoEncryption()))
+    return cert, key
+
+
 class PhoneLink:
     def __init__(self, port: int):
         self.token = secrets.token_hex(4)
@@ -63,10 +123,10 @@ class PhoneLink:
     def url(self) -> str:
         if time.time() - self._ip[0] > 10:
             self._ip = (time.time(), lan_ip())
-        return f"http://{self._ip[1]}:{self.port}/p/{self.token}"
+        return f"https://{self._ip[1]}:{self.port}/p/{self.token}"
 
     def allows(self, path: str) -> bool:
-        return path in (f"/p/{self.token}", f"/api/phone/photo/{self.token}")
+        return path in (f"/p/{self.token}", f"/api/phone/photo/{self.token}", f"/api/phone/frame/{self.token}")
 
     def state(self) -> dict:
         return {"url": self.url, "count": self.count, "received_at": self.received_at, "status": self.status,
@@ -169,6 +229,42 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
     @r.get("/api/phone/link")
     def phone_link():
         return link.state()
+
+    @r.post("/api/phone/frame/{token}")
+    async def phone_frame(token: str, request: Request):
+        """One frame of the phone's live camera."""
+        import cv2
+        import numpy as np
+        if not secrets.compare_digest(token, link.token):
+            raise HTTPException(404)
+        data = await request.body()
+        if not data or len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "Frame too large")
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise HTTPException(400, "Not a picture")
+        sys.phone_camera.put(img)
+        return {"ok": True}
+
+    @r.get("/phone/stream")
+    def phone_stream():
+        """The phone's view, for the laptop screen."""
+        import cv2
+
+        def frames():
+            last = -1
+            while True:
+                cam = sys.phone_camera
+                if cam.count == last or cam.frame is None:
+                    time.sleep(0.05)
+                    if not cam.live and last != -1:
+                        return
+                    continue
+                last = cam.count
+                ok, jpg = cv2.imencode(".jpg", cam.frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                if ok:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n"
+        return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
     @r.get("/api/phone/qr.svg")
     def qr():

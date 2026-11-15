@@ -294,6 +294,7 @@ class PlateCfg(_M):
 class AppCfg(_M):
     host: str = "127.0.0.1"
     port: int = 8000
+    phone_port: int = 8443                     # the phone page (HTTPS; a phone only allows live camera on a secure page)
     phone_link: bool = True                    # also listen on the local network, for the phone photo page only
                                                # (see app/phone.py: every other URL answers only to this machine)
     ws_hz: float = 10
