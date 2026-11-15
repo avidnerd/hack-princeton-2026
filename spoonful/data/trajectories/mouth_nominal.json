@@ -2,25 +2,24 @@
  "name": "mouth_nominal",
  "kind": "pose",
  "meta": {
-  "recorded_at": "2026-11-14T17:31:44",
-  "backend": "xarm"
+  "source": "quick setup"
  },
  "waypoints": [
   {
    "t": 0.0,
    "deg": {
-    "base": -102.24,
-    "shoulder": -13.92,
-    "elbow": -45.12,
-    "wrist_pitch": 24.96,
-    "wrist_roll": -6.48
+    "base": -90.96,
+    "shoulder": 18.48,
+    "elbow": -65.04,
+    "wrist_pitch": 39.12,
+    "wrist_roll": -6.24
    },
    "units": {
-    "base": 74,
-    "shoulder": 442,
-    "elbow": 312,
-    "wrist_pitch": 604,
-    "wrist_roll": 473
+    "base": 121,
+    "shoulder": 577,
+    "elbow": 229,
+    "wrist_pitch": 663,
+    "wrist_roll": 474
    },
    "speed": "near_face"
   }

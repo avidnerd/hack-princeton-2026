@@ -2,25 +2,24 @@
  "name": "pre_delivery",
  "kind": "pose",
  "meta": {
-  "recorded_at": "2026-11-14T17:31:32",
-  "backend": "xarm"
+  "source": "quick setup"
  },
  "waypoints": [
   {
    "t": 0.0,
    "deg": {
-    "base": -102.48,
-    "shoulder": 7.44,
-    "elbow": -45.6,
-    "wrist_pitch": 51.84,
-    "wrist_roll": -6.48
+    "base": -90.96,
+    "shoulder": 53.69,
+    "elbow": -63.13,
+    "wrist_pitch": 76.24,
+    "wrist_roll": -6.24
    },
    "units": {
-    "base": 73,
-    "shoulder": 531,
-    "elbow": 310,
-    "wrist_pitch": 716,
-    "wrist_roll": 473
+    "base": 121,
+    "shoulder": 724,
+    "elbow": 237,
+    "wrist_pitch": 818,
+    "wrist_roll": 474
    },
    "speed": "near_face"
   }

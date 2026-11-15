@@ -67,10 +67,16 @@ kinematics:
   base_height_mm: 67.2
   upper_arm_mm: 94.9
   forearm_mm: 90.4
-  tool_mm: 220.0
-  tool_offset_mm: -35.0
+  tool_mm: 246.2
+  tool_offset_mm: -34.2
   spoon_measured: true
-  face_cyl: null
+  face_cyl:
+    cx: 293.3
+    cy: -1.3
+    r: 65.0
+    z:
+    - 132.9
+    - 382.9
   sign:
     base: 1.0
     shoulder: -1.0
@@ -83,7 +89,7 @@ kinematics:
     wrist_pitch: -3.6
   face_zone:
     x:
-    - 290.0
+    - 243.0
     - 600.0
     y:
     - -200.0
@@ -291,14 +297,42 @@ plate:
   bowls:
   - name: bowl1
     roi:
-    - 465
-    - 455
-    - 150
-    - 130
+    - 0
+    - 0
+    - 1280
+    - 720
     scoop: ''
-    label: ''
-    watch: true
-    attack: {}
+    label: applesauce
+    watch: false
+    attack:
+      strategy: skim
+      why: Applesauce is soft and spreadable, ideal for a shallow skimming motion.
+      source: vision
+      entry_angle_deg: 25.0
+      depth_mm: 5.0
+      saw_strokes: 0
+      speed: 0.8
+      drag_mm: 20.0
+      contact_extra_deg: 0
+  - name: bowl2
+    roi:
+    - 0
+    - 0
+    - 1280
+    - 720
+    scoop: ''
+    label: honeydew jelly
+    watch: false
+    attack:
+      strategy: stab_and_saw
+      why: The jelly is firm and requires cutting to scoop effectively.
+      source: vision
+      entry_angle_deg: 45.0
+      depth_mm: 10.0
+      saw_strokes: 2
+      speed: 0.6
+      drag_mm: 15.0
+      contact_extra_deg: 4.0
 app:
   host: 127.0.0.1
   port: 8000

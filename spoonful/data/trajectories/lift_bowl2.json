@@ -1,0 +1,64 @@
+{
+ "name": "lift_bowl2",
+ "kind": "path",
+ "meta": {
+  "source": "quick setup"
+ },
+ "waypoints": [
+  {
+   "t": 0.0,
+   "deg": {
+    "base": -107.97,
+    "shoulder": 53.7,
+    "elbow": -88.96,
+    "wrist_pitch": 69.64,
+    "wrist_roll": -6.48
+   },
+   "units": {
+    "base": 50,
+    "shoulder": 724,
+    "elbow": 129,
+    "wrist_pitch": 790,
+    "wrist_roll": 473
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.1,
+   "deg": {
+    "base": -107.97,
+    "shoulder": 53.63,
+    "elbow": -70.7,
+    "wrist_pitch": 67.83,
+    "wrist_roll": -6.48
+   },
+   "units": {
+    "base": 50,
+    "shoulder": 723,
+    "elbow": 205,
+    "wrist_pitch": 783,
+    "wrist_roll": 473
+   },
+   "speed": "normal"
+  },
+  {
+   "t": 0.2,
+   "deg": {
+    "base": -90.96,
+    "shoulder": 53.69,
+    "elbow": -63.13,
+    "wrist_pitch": 76.24,
+    "wrist_roll": -6.24
+   },
+   "units": {
+    "base": 121,
+    "shoulder": 724,
+    "elbow": 237,
+    "wrist_pitch": 818,
+    "wrist_roll": 474
+   },
+   "speed": "normal"
+  }
+ ],
+ "raw": []
+}
