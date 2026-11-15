@@ -348,25 +348,25 @@ plate:
     watch: false
     attack:
       strategy: skim
-      why: Applesauce is soft and spreadable, requiring a shallow surface scoop.
+      why: Applesauce is soft and spreadable, ideal for a shallow surface scoop.
       source: vision
-      entry_angle_deg: 30.0
+      entry_angle_deg: 25.0
       depth_mm: 5.0
       saw_strokes: 0
-      speed: 0.6
+      speed: 0.8
       drag_mm: 20.0
       contact_extra_deg: 0
     cup:
-      x_mm: 192.8
-      y_mm: 60.5
+      x_mm: 231.2
+      y_mm: 78.3
       radius_mm: 33.7
       rim_mm: 41.6
       wall_mm: 4.8
       floor_mm: 1.5
       food_below_rim_mm: null
-      uncertainty_mm: 13.2
-      confirmed: false
-      source: photo
+      uncertainty_mm: 3.0
+      confirmed: true
+      source: confirmed
   - name: bowl2
     roi:
     - 0
@@ -387,8 +387,8 @@ plate:
       why: it's thick, so I'll dig in at an angle
       source: rules
     cup:
-      x_mm: 219.7
-      y_mm: -69.4
+      x_mm: 210.8
+      y_mm: -79.5
       radius_mm: 53.1
       rim_mm: 59.0
       wall_mm: 2.0

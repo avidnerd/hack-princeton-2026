@@ -437,11 +437,14 @@ function renderPlate() {
   const p = S && S.plate;
   const line = $("plate-line");
   if (!p || !p.enabled) { line.classList.add("hidden"); return; }
-  const foods = p.bowls.filter((b) => b.food).map((b) => cap(b.food) + (b.empty ? " (finished)" : ""));
-  const next = p.bowls.find((b) => b.name === (S.fsm.bowl || S.fsm.last_bowl));
-  line.textContent = (foods.length ? foods.join(" · ") : "No food seen yet") +
-    (next && next.food ? `   ${S.fsm.bowl ? "Now" : "Next"}: ${cap(next.food)}` : "");
-  line.classList.remove("hidden");
+  const nextName = S.fsm.bowl || S.fsm.next_bowl || S.fsm.last_bowl;
+  line.replaceChildren(...p.bowls.filter((b) => b.food).map((b) => {
+    const chip = document.createElement("span");
+    chip.className = "food" + (b.empty ? " done" : "") + (b.name === nextName ? " next" : "");
+    chip.textContent = cap(b.food);
+    return chip;
+  }));
+  line.classList.toggle("hidden", !line.children.length);
   $("plate-status").textContent = p.error ? `Vision problem: ${p.error}`
     : "Show aim hovers the spoon over each bowl; the arrows move it 5 mm. For a cup: centre the spoon over the opening, enter its sizes, then confirm.";
   renderSpoonSize();

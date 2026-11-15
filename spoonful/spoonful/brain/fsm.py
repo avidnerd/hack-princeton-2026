@@ -116,6 +116,9 @@ class Bite:
     hold_since: Optional[float] = None
 
 
+GO_ORDER = ("apple", "caramel")        # the order GO serves in when no food was asked for
+
+
 class FSM:
     def __init__(self, cfg: Config, arm: Arm, lib: Library, gate: Gate, offsets: OffsetTracker,
                  speaker: Speaker, pace: Pace, profiles: ProfileStore, session: Session, log: Log,
@@ -157,6 +160,7 @@ class FSM:
         self.plate = None                      # PlateWatcher (perception/plate.py), set by System
         self.last_bowl: Optional[str] = None
         self.bite_queue: list[str] = []
+        self.picked: Optional[str] = None          # food chosen by voice for the next bite
         self.aim = None                        # aim_check.AimCheck (System): the webcam checks the aim before a scoop
         self._look: Optional[dict] = None
         self.food_surface = None               # photo_map.FoodSurface (System): predict -> feel -> update        # planner: "a little of each" -> one bowl per GO press   # GO / plain "bite" repeats the last food asked for
@@ -378,6 +382,7 @@ class FSM:
                 bowl = self._choose_bowl(kw.get("bowl"), announce=False)
                 if bowl:
                     self.bite_queue = []
+                    self.picked = bowl
                     food = self.plate.food_of(bowl) or "that"
                     if not kw.get("quiet"):
                         self.speaker.say_text(f"{food.capitalize()}. Ready when you are"
@@ -394,7 +399,14 @@ class FSM:
                 asked = kw.get("bowl")
                 if asked is None and self.bite_queue:
                     asked = self.bite_queue.pop(0)          # next one the planner lined up
-                bowl = self._choose_bowl(asked, announce=bool(kw.get("bowl")))
+                turn = False
+                if asked is None:
+                    asked = self.picked
+                    if asked is None:                       # nobody chose: the cups take turns, said out loud
+                        asked = self._turn_bowl()
+                        turn = asked is not None
+                self.picked = None
+                bowl = self._choose_bowl(asked, announce=bool(kw.get("bowl")) or turn)
                 if bowl is not False:
                     self._start_bite(src or "ui", now, bowl)
         elif kind in ("slower", "faster"):
@@ -424,6 +436,23 @@ class FSM:
         self._go(S.FAULT, kind)
 
     # ================================================================== bite bookkeeping
+    def _turn_bowl(self) -> Optional[str]:
+        """With no food chosen, GO alone still works: applesauce first, then the caramel, then round again."""
+        p = self.plate
+        if p is None or not p.enabled or not self.cfg.plate.rim.enabled:
+            return None
+        bowls = [n for n in p.bowls if rim_bowl(self.cfg, n) is not None and not p.is_empty(n)]
+        if len(bowls) < 2:
+            return None
+
+        def rank(n: str) -> int:
+            food = (p.food_of(n) or "").lower()
+            return next((i for i, k in enumerate(GO_ORDER) if k in food), len(GO_ORDER))
+        bowls.sort(key=rank)
+        if self.last_bowl in bowls:
+            return bowls[(bowls.index(self.last_bowl) + 1) % len(bowls)]
+        return bowls[0]
+
     def _choose_bowl(self, asked: Optional[str], announce: bool = True):
         """Which bowl to scoop from. None = the profile's default scoop (no plate set up). False = refuse (said why)."""
         p = self.plate
@@ -1257,6 +1286,7 @@ class FSM:
             "stop_release_armed": bool(self.stop_release_armed_at),
             "stop_switch_off": self.stop_switch_off,
             "bowl": self.bite.bowl if self.bite else None, "last_bowl": self.last_bowl,
+            "next_bowl": self.picked or (self.bite_queue[0] if self.bite_queue else None) or self._turn_bowl(),
             "texture": self.bite.texture if self.bite else None,
             "queue": list(self.bite_queue),
             "spoon_to_mouth_mm": round(self.arm.servo_error_mm()) if self.state == S.DELIVERING else None,
