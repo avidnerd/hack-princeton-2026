@@ -267,4 +267,21 @@ def test_food_named_without_the_wake_word_is_still_picked(plate_system):
     s.on_unaddressed_voice("so anyway I was telling him about the game", 0.9)   # ordinary talk: ignored
     time.sleep(0.2)
     assert s.fsm.last_bowl == "bowl1"
-    assert "applesauce" in s.voice_hint() and "Spoonful" in s.voice_hint()
+    assert s.voice_hint() == ""                                            # off unless asked for
+    s.cfg.voice.hint = True
+    assert s.voice_hint() == "applesauce, yogurt"                          # a list, not a request
+    s.fsm.last_bowl = None
+    s.on_unaddressed_voice("applesauce, yogurt", 0.9)                      # the hint written back: not a choice
+    time.sleep(0.2)
+    assert s.fsm.last_bowl is None
+
+
+def test_recogniser_echoes_are_thrown_away():
+    from spoonful.brain.voice import is_echo
+    hint = "applesauce, honeydew jelly"
+    assert is_echo("Applesauce, honeydew jelly.", hint)
+    assert is_echo("Spoonful, give me the applesauce. Spoonful, give me the applesauce. Spoonful, give me", hint)
+    assert is_echo("give me the jelly give me the jelly", "")
+    assert not is_echo("Spoonful, give me the applesauce.", hint)
+    assert not is_echo("Spoonful, switch to the honeydew jelly.", hint)
+    assert not is_echo("stop", hint) and not is_echo("", hint)

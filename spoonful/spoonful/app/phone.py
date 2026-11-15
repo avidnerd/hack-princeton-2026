@@ -43,6 +43,12 @@ class Chosen(BaseModel):
     ids: list[int]
 
 
+class Aim(BaseModel):
+    bowl: str
+    further_mm: float = 0
+    left_mm: float = 0
+
+
 class PhoneLink:
     def __init__(self, port: int):
         self.token = secrets.token_hex(4)
@@ -139,6 +145,26 @@ def make_router(sys, link: PhoneLink) -> APIRouter:
         n = len(bowls)
         link.status, link.message = "done", f"Serving from {n} bowl{'s' if n != 1 else ''}"
         return {"ok": True, "bowls": bowls}
+
+    @r.post("/api/setup/aim")
+    def aim(b: Aim):
+        """Hover over the bowl; with a nudge, move its scoop first."""
+        try:
+            if b.further_mm or b.left_mm:
+                return {"ok": True, **photo_setup.nudge(sys, b.bowl, b.further_mm, b.left_mm)}
+            photo_setup.aim(sys, b.bowl)
+        except photo_setup.SetupProblem as e:
+            raise HTTPException(409, str(e))
+        return {"ok": True}
+
+    @r.post("/api/setup/aim/camera")
+    def aim_camera(b: Aim):
+        """Check this bowl's aim with the webcam and correct it (see brain/aim_check.py)."""
+        try:
+            sys.aim_check.start(b.bowl)
+        except photo_setup.SetupProblem as e:
+            raise HTTPException(409, str(e))
+        return {"ok": True}
 
     @r.get("/api/phone/link")
     def phone_link():

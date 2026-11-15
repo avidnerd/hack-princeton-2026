@@ -411,8 +411,11 @@ function renderPlate() {
   line.textContent = (foods.length ? foods.join(" · ") : "No food seen yet") +
     (next && next.food ? `   ${S.fsm.bowl ? "Now" : "Next"}: ${cap(next.food)}` : "");
   line.classList.remove("hidden");
-  $("plate-status").textContent = p.error ? `Vision problem: ${p.error}` : "Name a food to correct what the camera saw.";
-  const key = JSON.stringify(p.bowls) + S.fsm.state;
+  $("plate-status").textContent = p.error ? `Vision problem: ${p.error}`
+    : "Check aim with camera lines the spoon up over each bowl. Show aim hovers it there; the arrows move it 5 mm.";
+  const idle = S.fsm.state === "IDLE";
+  const aim = (S.setup && S.setup.aim) || { running: null, results: {} };
+  const key = JSON.stringify([p.bowls, aim]) + S.fsm.state;
   if (key === plateKey) return;            // don't rebuild while someone is typing
   const active = document.activeElement;
   if (active && (active.classList.contains("bowl-food") || active.classList.contains("bowl-tex"))) return;
@@ -427,6 +430,15 @@ function renderPlate() {
         ${["liquid", "soft", "thick", "firm"].map((t) => `<option value="${t}" ${b.texture_why === "operator" && b.texture === t ? "selected" : ""}>${t}</option>`).join("")}
       </select>
       <button data-bowlbite="${esc(b.name)}" ${S.fsm.state === "LISTENING" ? "" : "disabled"}>Bite of this</button>
+      <span class="aim" data-aim="${esc(b.name)}">
+        <button data-camera="1" class="primary" ${idle && !aim.running ? "" : "disabled"}>Check aim with camera</button>
+        <button data-step="0,0" ${idle ? "" : "disabled"}>Show aim</button>
+        <button data-step="-5,0" ${idle ? "" : "disabled"} title="Scoop 5 mm closer to the arm">Closer</button>
+        <button data-step="5,0" ${idle ? "" : "disabled"} title="Scoop 5 mm further from the arm">Further</button>
+        <button data-step="0,5" ${idle ? "" : "disabled"} title="Scoop 5 mm to the arm's left">Left</button>
+        <button data-step="0,-5" ${idle ? "" : "disabled"} title="Scoop 5 mm to the arm's right">Right</button>
+        <span class="status ${(aim.results[b.name] || {}).state === "problem" ? "bad" : ""}">${esc((aim.results[b.name] || {}).message || "")}</span>
+      </span>
     </div>`).join("");
 }
 $("ask-go").onclick = () => {
@@ -441,6 +453,11 @@ $("plate-bowls").onclick = (e) => {
     const inp = document.querySelector(`.bowl-food[data-bowl="${t.dataset.set}"]`);
     post("plate/label", { bowl: t.dataset.set, food: inp.value.trim() }).then(() => { inp.value = ""; plateKey = ""; });
   } else if (t.dataset.bowlbite) post("plate/bite", { bowl: t.dataset.bowlbite });
+  else if (t.dataset.camera) post("setup/aim/camera", { bowl: t.closest(".aim").dataset.aim });
+  else if (t.dataset.step) {
+    const [further_mm, left_mm] = t.dataset.step.split(",").map(Number);
+    post("setup/aim", { bowl: t.closest(".aim").dataset.aim, further_mm, left_mm });
+  }
 };
 $("plate-bowls").onchange = (e) => {
   const t = e.target;

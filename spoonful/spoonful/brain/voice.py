@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import collections
+import difflib
 import math
 import os
 import queue
@@ -58,6 +59,21 @@ def parse_command(text: str, cfg: VoiceCfg, require_wake: bool = True) -> Option
     return best[1] if best else None
 
 
+def is_echo(text: str, hint: str) -> bool:
+    """Pure. Did the recogniser write the hint out instead of hearing someone? True when the text is (nearly) the
+    hint itself, or one short phrase said twice or more in a row."""
+    t = re.sub(r"[^a-z ]", "", text.lower()).split()
+    h = re.sub(r"[^a-z ]", "", hint.lower()).split()
+    if not t:
+        return False
+    if h and len(t) >= 2 and difflib.SequenceMatcher(None, t, h).ratio() >= 0.75:
+        return True
+    for n in range(2, len(t) // 2 + 1):                  # the same n-word phrase back to back
+        if any(t[i:i + n] == t[i + n:i + 2 * n] for i in range(len(t) - 2 * n + 1)):
+            return True
+    return False
+
+
 PRE_ROLL_BLOCKS = 10        # 0.5 s of audio kept from before speech got loud
 
 
@@ -93,15 +109,18 @@ class Transcriber:
             self.model = WhisperModel(cfg.model, device="cpu", compute_type="int8")
 
     def __call__(self, audio: np.ndarray, hint: str = "") -> tuple[str, float]:
-        """hint: a sentence using the words to expect ("Spoonful, give me the applesauce."); it biases the
-        recogniser toward them, so "applesauce" isn't heard as "apples"."""
+        """hint: the words to expect, as a plain list ("applesauce, honeydew jelly"); it biases the recogniser
+        toward them, so "applesauce" isn't heard as "apples". On noise the recogniser tends to write the hint
+        itself out, so anything that isn't clearly speech, or that just repeats the hint, is thrown away."""
         if self.cfg.backend == "faster_whisper":
             segs, _ = self.model.transcribe(audio, language="en", beam_size=1, vad_filter=False,
                                             condition_on_previous_text=False, initial_prompt=hint or None)
-            segs = list(segs)
+            segs = [s for s in segs if s.no_speech_prob < 0.5 and s.compression_ratio < 2.0]
             if not segs:
                 return "", 0.0
             text = " ".join(s.text for s in segs)
+            if is_echo(text, hint):
+                return "", 0.0
             conf = math.exp(sum(s.avg_logprob for s in segs) / len(segs))
             return text, conf
         return self._openai(audio)

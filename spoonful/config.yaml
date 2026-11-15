@@ -116,9 +116,9 @@ face:
   jaw_open_threshold: 0.25
   hysteresis_fraction: 0.7
   yaw_max_deg: 22.0
-  yaw_center_deg: -27.3
+  yaw_center_deg: -26.8
   pitch_max_deg: 20.0
-  pitch_offset_deg: 22.8
+  pitch_offset_deg: 18.3
   presence_hold_s: 0.5
   mouth_open_hold_s: 0.3
   mouth_closed_taken_s: 0.5
@@ -311,7 +311,7 @@ plate:
       entry_angle_deg: 25.0
       depth_mm: 5.0
       saw_strokes: 0
-      speed: 0.6
+      speed: 0.8
       drag_mm: 20.0
       contact_extra_deg: 0
   - name: bowl2
@@ -327,11 +327,11 @@ plate:
       strategy: stab_and_saw
       why: The jelly is firm and requires cutting to scoop effectively.
       source: vision
-      entry_angle_deg: 45.0
+      entry_angle_deg: 60.0
       depth_mm: 10.0
       saw_strokes: 2
       speed: 0.5
-      drag_mm: 15.0
+      drag_mm: 10.0
       contact_extra_deg: 4.0
 app:
   host: 127.0.0.1

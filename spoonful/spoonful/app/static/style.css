@@ -160,6 +160,8 @@ details > * + * { margin-top: 8px; }
 /* ---------------------------------------------------------------- tools */
 .bowl-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); }
 .bowl-row b { min-width: 130px; font-size: 18px; }
+.bowl-row .aim { display: flex; gap: 6px; flex-basis: 100%; flex-wrap: wrap; }
+.bowl-row .aim button { padding: 6px 10px; font-size: 15px; }
 .bowl-row .meta { color: var(--steel); min-width: 150px; }
 .bowl-row .empty { color: var(--steel); text-decoration: line-through; }
 .plan { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px;

@@ -111,9 +111,18 @@ def solve_rz(kin: KinCfg, q: Mapping[str, float], r_mm: float, z_mm: float, iter
     return cur if abs(e[0]) < 0.5 and abs(e[1]) < 0.5 and abs(e[2]) < 0.2 else None
 
 
+def dip_index(kin: KinCfg, poses: list[Mapping[str, float]]) -> int:
+    """Index of the waypoint where the spoon first reaches the bottom of the scoop. The drag that follows is at the
+    same height, so "the lowest point" alone would flip between the two."""
+    idx = range(1, len(poses) - 1) if len(poses) >= 3 else range(len(poses))
+    zs = {i: K.fk(kin, poses[i])[2] for i in idx}
+    z_min = min(zs.values())
+    return next(i for i in idx if zs[i] <= z_min + 1.0)
+
+
 def scoop_anchor(kin: KinCfg, poses: list[Mapping[str, float]]) -> tuple[float, float]:
     """Table (x, y) of the scoop's lowest point: where the bowl was when the scoop was taught."""
-    p = min(poses, key=lambda q: K.fk(kin, q)[2])
+    p = poses[dip_index(kin, poses)]
     x, y, _ = K.fk(kin, p)
     return x, y
 
@@ -147,7 +156,7 @@ def adapt_scoop(kin: KinCfg, poses: list[Mapping[str, float]], depth_mm: float =
     zs = [K.fk(kin, p)[2] for p in out]
     inner = range(1, len(out) - 1)
     z_min = min(zs[i] for i in inner)
-    deepest = min(inner, key=lambda i: zs[i])
+    deepest = dip_index(kin, out)
     if depth_mm > 0:
         for i in inner:
             if zs[i] <= z_min + IN_FOOD_BAND_MM:
@@ -222,7 +231,7 @@ def shape_scoop(kin: KinCfg, poses: list[Mapping[str, float]], entry_angle_deg: 
     zs = [K.fk(kin, p)[2] for p in out]
     inner = range(1, len(out) - 1)
     z_min = min(zs[i] for i in inner)
-    k = min(inner, key=lambda i: zs[i])
+    k = dip_index(kin, out)
     sign = 1.0 if _spoon_angle(kin, out[k]) >= 0 else -1.0
     target = sign * (90.0 + entry_angle_deg)            # angle from straight up: 90 = level, 180 = straight down
     band = [i for i in inner if zs[i] <= z_min + IN_FOOD_BAND_MM]

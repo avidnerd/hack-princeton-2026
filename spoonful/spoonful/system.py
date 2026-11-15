@@ -13,7 +13,7 @@ from .log import Log
 from .perception.camera import Camera
 from .perception.face import FaceTracker
 from .perception.food import FoodWatcher
-from .perception.plate import PlateWatcher, asks_whats_on_plate
+from .perception.plate import PlateWatcher, asks_whats_on_plate, match_food
 from .perception.gate import Gate
 from .perception.face import REF_W, focal_px
 from .perception.offsets import OffsetMap, OffsetTracker, fit
@@ -87,6 +87,8 @@ class System:
         self.plate = PlateWatcher(cfg, lambda: (lambda f: f.image if f else None)(cam.latest()),
                                   active_fn=lambda: self.fsm.state.value == "LISTENING")   # only during a session
         self.fsm.plate = self.plate
+        from .brain.aim_check import AimCheck
+        self.aim_check = AimCheck(self)
         self.setup_state: dict = {}                # what Setup has done this run (see brain/photo_setup.status)
         from .brain.planner import Planner
         self.planner = Planner(None, self.log)
@@ -147,18 +149,20 @@ class System:
             self.fsm.post(cmd, source="voice")
 
     def voice_hint(self) -> str:
-        """A sentence with the words the recogniser should expect: the wake word and the foods on the table."""
-        foods = [f for f in self.plate.labels().values() if f]
-        return " ".join(f"Spoonful, give me the {f}." for f in foods) or "Spoonful, give me a bite."
+        """The foods on the table, as a plain list. No wake word and no command in it: on noise the recogniser can
+        write its hint out, and a list of foods is not a request."""
+        if not self.cfg.voice.hint:
+            return ""
+        return ", ".join(f for f in self.plate.labels().values() if f)
 
     def on_unaddressed_voice(self, text: str, conf: float) -> None:
         """Said without "Spoonful" (or the word was cut off). Picking a food is harmless, since nothing moves until
         GO, so a clear food name still counts. Everything else is ignored."""
         if self.cfg.voice.requests or not self.cfg.voice.select or not self.plate.enabled:
             return
-        bowl = self.plate.find(text)
-        if bowl:
-            self.fsm.post("select", source="voice", bowl=bowl)
+        named = [b for b, food in self.plate.labels().items() if food and match_food(text, {b: food})]
+        if len(named) == 1:                      # exactly one food named; a list of foods is not a choice
+            self.fsm.post("select", source="voice", bowl=named[0])
 
     def planner_scene(self) -> list[dict]:
         out = []

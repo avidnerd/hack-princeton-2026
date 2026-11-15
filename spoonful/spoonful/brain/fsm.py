@@ -21,7 +21,7 @@ from typing import Callable, Optional
 from ..arm import kinematics as K
 from ..arm.arm import Arm, Motion, MotionDenied
 from ..arm.contact import Contact
-from ..arm.scoop_style import adapt_scoop, shape_scoop, shift_scoop
+from ..arm.scoop_style import adapt_scoop, dip_index, shape_scoop, shift_scoop
 from ..arm.trajectory import Library, Pose, check_limits, lerp_pose, plan
 from ..config import ARM_JOINTS, Config, ScoopStyle
 from ..log import Log
@@ -687,7 +687,7 @@ class FSM:
         kin, pc = self.cfg.kinematics, self.cfg.plate.probe
         if len(poses) < 3:
             return False
-        k = min(range(1, len(poses) - 1), key=lambda i: K.fk(kin, poses[i])[2])
+        k = dip_index(kin, poses)
         dip = poses[k]
 
         def within(q):

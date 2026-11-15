@@ -47,6 +47,7 @@ def fast_cfg(tmp_path):
     # the sim trajectories were made with the original spoon model; the live config holds the measured real spoon
     c.kinematics.tool_mm, c.kinematics.tool_offset_mm, c.kinematics.spoon_measured = 191.8, 30.0, False
     c.kinematics.face_zone.x = (235.0, 600.0)
+    c.kinematics.face_cyl = None           # the live config's zone is around the real diner's mouth
     c.arm.stop_torque_off_after_s = 1.0      # test_fsm checks the torque-off path; the live arm holds instead
     c.voice.requests = True                # voice food requests have tests; the live config may be button-only
     c.esp32.button_role = "stop"

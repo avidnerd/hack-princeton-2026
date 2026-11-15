@@ -189,6 +189,8 @@ class SpeechCfg(_M):
 
 class VoiceCfg(_M):
     requests: bool = True                      # False: voice can only STOP (bites come from the GO button / UI)
+    hint: bool = False                         # bias the recogniser toward the food names. Off: in a noisy room it
+                                               # made the recogniser invent requests out of background sound
     select: bool = True                        # with requests False: "Spoonful, the rice" picks the food (no motion); GO bites
     enabled: bool = False
     wake: str = "spoonful"

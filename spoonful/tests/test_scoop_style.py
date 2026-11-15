@@ -1,5 +1,6 @@
 """How hard to scoop, by food texture: jello gets a deeper, slower scoop with a saw; applesauce the taught one."""
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -93,6 +94,9 @@ def _bite(s, food_text):
     start_listening(s)
     s.on_voice(None, food_text, 0.9)
     wait_state(s, "SCOOPING")
+    t0 = time.time()
+    while s.fsm.motion is None and time.time() - t0 < 3:      # the state changes just before the scoop is sent
+        time.sleep(0.01)
     return s.fsm.motion
 
 

@@ -76,3 +76,26 @@ def test_save_mouth_sets_waiting_pose_and_face_zone(app_system):
     assert kin.face_cyl is not None and K.in_face_zone(kin, mouth) and not K.in_face_zone(kin, pre)
     assert 70 <= K.tip_distance(kin, mouth, pre) <= 110
     assert s.arm.torque_on
+
+
+def test_nudge_moves_the_scoop_and_shows_the_new_aim(app_system):
+    import math
+    from spoonful.arm.scoop_style import scoop_anchor
+    s, app, link = app_system
+    laptop = TestClient(app)
+    kin = s.cfg.kinematics
+    x0, y0 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    r = laptop.post("/api/setup/aim", json={"bowl": "bowl1", "further_mm": 10, "left_mm": 5})
+    assert r.status_code == 200, r.text
+    x1, y1 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    rr = math.hypot(x0, y0)
+    assert (x1 - x0) * x0 / rr + (y1 - y0) * y0 / rr == pytest.approx(10, abs=1.5)        # further from the base
+    assert -(x1 - x0) * y0 / rr + (y1 - y0) * x0 / rr == pytest.approx(5, abs=1.5)        # to the arm's left
+    assert s.lib.has("lift_bowl1")
+    time.sleep(0.2)
+    s.arm._motion and s.arm._motion.wait(10)
+    tip = K.fk(kin, s.arm.state.deg)
+    assert math.hypot(tip[0] - x1, tip[1] - y1) < 6                                        # hovering over the new spot
+    assert tip[2] > K.fk(kin, min(s.lib.items["scoop_bowl1"].poses, key=lambda q: K.fk(kin, q)[2]))[2] + 40
+    assert laptop.post("/api/setup/aim", json={"bowl": "bowl1", "further_mm": 80}).status_code == 409   # too far
+    assert laptop.post("/api/setup/aim", json={"bowl": "bowl9"}).status_code == 409

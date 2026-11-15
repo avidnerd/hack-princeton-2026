@@ -14,6 +14,7 @@ import math
 import time
 
 from ..arm import kinematics as K
+from ..arm.scoop_style import dip_index
 from ..arm.trajectory import plan
 from ..config import ARM_JOINTS, BowlCfg
 from ..perception.photo_map import PHOTO_TIP_MM, PROMPT, analyze_robust, predicted_surface_mm
@@ -195,6 +196,81 @@ def use_bowls(sys, ids: list[int]) -> list[dict]:
     return result
 
 
+AIM_ABOVE_MM = 60          # how far above the dip the spoon hovers when showing where it will scoop
+MAX_NUDGE_MM = 60          # total correction allowed from where the photo put the bowl
+
+
+def _dip(sys, name: str) -> dict:
+    scoop = f"scoop_{name}"
+    if not sys.lib.has(scoop):
+        raise SetupProblem("That bowl has no scoop yet. Map the table first.")
+    poses = sys.lib.items[scoop].poses
+    return poses[dip_index(sys.cfg.kinematics, poses)]
+
+
+def aim(sys, name: str) -> None:
+    """Hover the spoon tip above where it will dip into this bowl, so the aim can be checked by eye."""
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    kin = sys.cfg.kinematics
+    dip = _dip(sys, name)
+    x, y, z = K.fk(kin, dip)
+    QS.LIMITS = sys.cfg.arm.soft_limits_deg
+    try:
+        above = QS._at(kin, dip, math.hypot(x, y), z + AIM_ABOVE_MM)
+    except QS.SetupError as e:
+        raise SetupProblem("Can't hover above that bowl.") from e
+    sys.arm.goto(above, "normal", 0.5, name="aim")
+
+
+def nudge(sys, name: str, further_mm: float, left_mm: float) -> dict:
+    """Move this bowl's scoop on the table: further from / closer to the arm's base, and to the arm's left / right.
+    The lift is rebuilt to start where the scoop now ends, and the spoon moves to show the new aim."""
+    from ..arm.scoop_style import scoop_anchor, shift_scoop
+    if sys.fsm.state.value != "IDLE":
+        raise SetupProblem("End the session first.")
+    kin = sys.cfg.kinematics
+    scoop = sys.lib.items[f"scoop_{name}"].poses if sys.lib.has(f"scoop_{name}") else None
+    if scoop is None:
+        raise SetupProblem("That bowl has no scoop yet. Map the table first.")
+    total = sys.setup_state.setdefault("nudges", {}).get(name, [0.0, 0.0])
+    new_total = [total[0] + further_mm, total[1] + left_mm]
+    if math.hypot(*new_total) > MAX_NUDGE_MM:
+        raise SetupProblem("That's more than 6 cm from where the photo put the bowl. Retake the photo instead.")
+    x, y = scoop_anchor(kin, scoop)
+    r = math.hypot(x, y)
+    dx = further_mm * x / r - left_mm * y / r
+    dy = further_mm * y / r + left_mm * x / r
+    QS.LIMITS = sys.cfg.arm.soft_limits_deg
+    moved = shift_scoop(kin, scoop, dx, dy)
+    try:
+        if moved is not None:
+            try:
+                plan(sys.cfg, moved[0], [(moved, "normal", "check")])
+            except Exception:
+                moved = None
+        if moved is None:        # the same shape doesn't fit there: build a fresh scoop at the new spot
+            dip = _dip(sys, name)
+            ref = sys.lib.pose("rest") if sys.lib.has("rest") else dict(sys.cfg.arm.home_pose)
+            moved = QS.build_scoop_at(kin, ref, x + dx, y + dy, K.fk(kin, dip)[2] + QS.DIP_BELOW_SURFACE_MM)
+        if any(K.in_face_zone(kin, q) for q in moved):
+            raise QS.SetupError("too close to your face")
+        lift = QS.build_lift(kin, moved[-1], sys.lib.pose("pre_delivery"))
+        plan(sys.cfg, moved[0], [(moved, "normal", "check")])
+        plan(sys.cfg, moved[-1], [(lift, "normal", "check")])
+    except Exception as e:
+        raise SetupProblem(f"The spoon can't scoop there ({e}).") from e
+    moves = {f"scoop_{name}": ("path", moved), f"lift_{name}": ("path", lift)}
+    if name == next(iter(sys.plate.bowls), None):
+        moves["scoop"], moves["lift"] = moves[f"scoop_{name}"], moves[f"lift_{name}"]
+    QS.save_all(sys.cfg, sys.lib.dir, {"moves": moves})
+    sys.lib.reload()
+    sys.setup_state["nudges"][name] = new_total
+    sys.log.event("scoop_nudge", detail_bowl=name, further_mm=further_mm, left_mm=left_mm, total=new_total)
+    aim(sys, name)
+    return {"further_mm": new_total[0], "left_mm": new_total[1]}
+
+
 def status(sys) -> dict:
     st = sys.setup_state
     kin = sys.cfg.kinematics
@@ -207,4 +283,5 @@ def status(sys) -> dict:
                   "candidates": [_public(c) for c in st.get("candidates") or []],
                   "photo_size": st.get("photo_size"), "photo_at": st.get("photo_at")},
         "looking": {"at": st.get("looking_at")},
+        "aim": sys.aim_check.status(),
     }
