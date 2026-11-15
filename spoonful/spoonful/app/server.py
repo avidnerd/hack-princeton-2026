@@ -14,7 +14,7 @@ from ..perception.face import draw_overlay
 from ..system import System
 from ..brain import photo_setup
 from .api import router
-from .phone import LocalOnly, PhoneLink, make_router
+from .phone import LocalOnly, PhoneLink, make_router, saved_token
 
 STATIC = Path(__file__).parent / "static"
 
@@ -51,7 +51,7 @@ def create_app(sys: System) -> FastAPI:
     app.state.sys = sys
     app.state.timeline = []
     app.include_router(router)
-    link = PhoneLink(sys.cfg.app.phone_port)
+    link = PhoneLink(sys.cfg.app.phone_port, saved_token(sys.cfg.path(sys.cfg.plate.track.calib_file).parent / "phone_token.txt"))
     app.state.phone = link
     app.include_router(make_router(sys, link))
     app.add_middleware(LocalOnly, allows=link.allows)

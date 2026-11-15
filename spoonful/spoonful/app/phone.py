@@ -21,6 +21,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -115,9 +116,27 @@ def ensure_cert(directory: Path) -> tuple[Path, Path]:
     return cert, key
 
 
+def saved_token(path: Path) -> str:
+    """The token in the phone's link, kept between runs so a phone that is already streaming carries on after the
+    app restarts. It only allows sending pictures."""
+    try:
+        t = path.read_text().strip()
+        if len(t) >= 8 and t.isalnum():
+            return t
+    except OSError:
+        pass
+    t = secrets.token_hex(8)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(t)
+    except OSError:
+        pass
+    return t
+
+
 class PhoneLink:
-    def __init__(self, port: int):
-        self.token = secrets.token_hex(4)
+    def __init__(self, port: int, token: Optional[str] = None):
+        self.token = token or secrets.token_hex(4)
         self.port = port
         self.count = 0
         self.received_at: float | None = None

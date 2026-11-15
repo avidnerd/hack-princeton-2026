@@ -625,14 +625,23 @@ class FSM:
 
     # ------------------------------------------------------------------ look before scooping
     LOOK_TIMEOUT_S = 6.0
+    CALIBRATE_TIMEOUT_S = 90.0
     LOOK_AGAIN_MM = 15          # after following the bowl this far, look once more from the new spot
 
     def _start_look(self) -> bool:
         """Pause above the bowl and ask the webcam whether the spoon is over it (brain/aim_check.py)."""
         b = self.bite
-        if not (self.cfg.plate.look_before_scoop and self.aim is not None and b and b.bowl
-                and b.looks < 2 and self.aim.ready(b.bowl)):
+        if not (self.cfg.plate.look_before_scoop and self.aim is not None and b and b.bowl and b.looks < 2):
             return False
+        if not self.aim.ready(b.bowl):
+            if b.looks or not self.aim.can_calibrate(b.bowl):
+                return False
+            # first scoop from this bowl: let the camera learn its view of it and correct the aim (about 30 s, once)
+            food = self.plate.food_of(b.bowl) or "bowl"
+            self.speaker.say_text(f"Lining up with the {food}")
+            self.aim.calibrate_async(b.bowl)
+            self._look = {"stage": "calibrating", "bowl": b.bowl, "t": time.monotonic()}
+            return True
         try:
             pose = self.aim.aim_pose(b.bowl)
             self.motion = self.arm.run(plan(self.cfg, self.arm.current(), [([pose], "normal", "aim")], 1.0, "aim"))
@@ -644,6 +653,14 @@ class FSM:
 
     def _in_look(self, now: float) -> None:
         lk = self._look
+        if lk["stage"] == "calibrating":
+            if self.aim.take_result() is None and now - lk["t"] < self.CALIBRATE_TIMEOUT_S:
+                return
+            self._look = None
+            self.bite.looks = 2                         # the check just looked (twice): scoop now
+            self.log.event("look", detail_bowl=lk["bowl"], first=True, confirmed=self.aim.ready(lk["bowl"]))
+            self._scoop_begin(look=False)
+            return
         if lk["stage"] == "moving":
             r = self._motion_result()
             if r is None:

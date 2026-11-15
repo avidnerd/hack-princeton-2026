@@ -15,8 +15,9 @@ Every look (about 2 s, one webcam frame):
   subtracting that height's worth of pixel shift gives the table point directly under the tip. Its distance from
   the bowl's base, turned back into millimetres with the Jacobian, is how far the scoop is off.
 
-At setup the scoop is corrected and checked again. Before each scoop the FSM pauses above the bowl, looks, and
-moves the scoop if the bowl isn't where it was (brain/fsm.py). A side-on webcam sees left-right well and depth less
+The check runs by itself on the first scoop from each bowl (or from the Setup screen): the scoop is corrected and
+checked again. Before every later scoop the FSM pauses above the bowl, looks, and moves the scoop if the bowl isn't
+where it was (brain/fsm.py). A side-on webcam sees left-right well and depth less
 well, so corrections are capped, a setup correction that doesn't reduce the error is undone, and nothing changes
 when the camera can't see the spoon or the bowl clearly.
 """
@@ -84,6 +85,8 @@ class AimCheck:
         self.jacobians: dict[str, np.ndarray] = {}      # bowl -> 3x2: px per mm of further / left / up
         self._abort = threading.Event()
         self._pending: Optional[dict] = None            # result of the look started by the FSM
+        self._states = {"IDLE"}                         # FSM states in which the check may move the arm
+        self.failed: set[str] = set()                   # bowls this camera view could not be confirmed on
 
     # ------------------------------------------------------------------ what was learned about the camera
     def _jacobian(self, bowl: str) -> Optional[np.ndarray]:
@@ -92,11 +95,43 @@ class AimCheck:
     def forget(self) -> None:
         """The table was mapped again (the laptop or the bowls may have moved)."""
         self.jacobians = {}
+        self.failed = set()
         if not self.running:
             self.results = {}
 
     def status(self) -> dict:
         return {"running": self.running, "results": self.results, "calibrated": sorted(self.jacobians)}
+
+    def can_calibrate(self, bowl: str) -> bool:
+        """Could the camera be checked on this bowl now? (It hasn't been yet, and there is a picture and vision.)"""
+        return (bowl not in self.jacobians and bowl not in self.failed and not self.running
+                and self.s.plate._point is not None and self.s.plate.image_generate is not None
+                and self.s.plate.frame_fn() is not None)
+
+    def calibrate_async(self, bowl: str) -> None:
+        """The first scoop from a bowl: do the whole setup check now, with the arm already on its way there."""
+        self._pending = pending = {"bowl": bowl, "done": False}
+        self._abort.clear()
+        self.running = bowl
+        self._states = {"SCOOPING"}
+
+        def run():
+            try:
+                self._check(bowl)
+            except (AimProblem, photo_setup.SetupProblem) as e:
+                self.jacobians.pop(bowl, None)
+                self.results.setdefault(bowl, {}).update(state="problem", message=str(e))
+            except Exception as e:
+                self.jacobians.pop(bowl, None)
+                self.s.log.event("aim_check_failed", detail_error=repr(e)[:200])
+                self.results.setdefault(bowl, {}).update(state="problem", message="The camera check failed.")
+            finally:
+                if bowl not in self.jacobians:
+                    self.failed.add(bowl)
+                self.running = None
+                self._states = {"IDLE"}
+                pending["done"] = True
+        threading.Thread(target=run, name="aim-first", daemon=True).start()
 
     def ready(self, bowl: str) -> bool:
         return (self._jacobian(bowl) is not None and self.s.plate._point is not None
@@ -214,7 +249,7 @@ class AimCheck:
         threading.Thread(target=self._run_all, args=(list(bowls),), name="aim-check", daemon=True).start()
 
     def _goto(self, pose: dict) -> None:
-        if self._abort.is_set() or self.s.fsm.state.value != "IDLE":
+        if self._abort.is_set() or self.s.fsm.state.value not in self._states:
             raise AimProblem("Stopped.")
         m = self.s.arm.goto(pose, "normal", 0.5, name="aim_check")
         if not m.wait(15).ok:
@@ -293,6 +328,8 @@ class AimCheck:
                     s.log.event("aim_check_failed", detail_error=repr(e)[:200])
                     self.results.setdefault(bowl, {}).update(state="problem",
                                                              message="The check failed. Use Show aim and the arrows.")
+                if bowl not in self.jacobians:
+                    self.failed.add(bowl)
                 if self._abort.is_set() or s.fsm.state.value != "IDLE":
                     break
         finally:

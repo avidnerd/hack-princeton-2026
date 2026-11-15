@@ -193,3 +193,35 @@ def test_the_right_dish_is_picked():
     assert AimCheck.pick_dish(dishes, "honeydew jelly", tip)["food"] == "green jelly cup"
     assert AimCheck.pick_dish(dishes, "yogurt", tip)["food"] == "green jelly cup"         # no such name: under the spoon
     assert AimCheck.pick_dish([], "applesauce", tip) is None
+
+
+def test_first_scoop_from_a_bowl_checks_the_aim_by_itself(aim_system):
+    """Nobody pressed 'Check aim with camera'. The photo put the bowl 18 mm short; the first bite must find that out
+    and scoop in the bowl, not on its near edge."""
+    from test_fsm import start_listening
+    s = aim_system
+    kin = s.cfg.kinematics
+    s.plate.set_label("bowl1", "applesauce")
+    x0, y0 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    r = math.hypot(x0, y0)
+    real = np.array([x0 + 18 * x0 / r, y0 + 18 * y0 / r, 0.0])              # the cup is really 18 mm further out
+    _camera(s, lambda: real)
+    assert not s.aim_check.ready("bowl1") and s.aim_check.can_calibrate("bowl1")
+    start_listening(s)
+    s.fsm.post("bite", source="ui", bowl="bowl1")
+    wait_state(s, "LIFTING", timeout=90)
+    x1, y1 = scoop_anchor(kin, s.lib.items["scoop_bowl1"].poses)
+    assert math.hypot(x1 - real[0], y1 - real[1]) < 6                       # scooped in the cup
+    assert s.aim_check.ready("bowl1")                                       # later bites just glance
+    assert s.aim_check.results["bowl1"]["state"] == "ok"
+
+
+def test_first_scoop_with_no_camera_view_just_scoops(aim_system):
+    from test_fsm import start_listening
+    s = aim_system
+    s.plate.set_label("bowl1", "applesauce")
+    s.plate.frame_fn = lambda: None
+    assert not s.aim_check.can_calibrate("bowl1")
+    start_listening(s)
+    s.fsm.post("bite", source="ui", bowl="bowl1")
+    wait_state(s, "LIFTING", timeout=30)
