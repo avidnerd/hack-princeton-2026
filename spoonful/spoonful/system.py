@@ -85,6 +85,7 @@ class System:
         self.plate = PlateWatcher(cfg, lambda: (lambda f: f.image if f else None)(cam.latest()),
                                   active_fn=lambda: self.fsm.state.value == "LISTENING")   # only during a session
         self.fsm.plate = self.plate
+        self.setup_state: dict = {}                # what Setup has done this run (see brain/photo_setup.status)
         from .brain.planner import Planner
         self.planner = Planner(None, self.log)
         from .perception.photo_map import FoodSurface

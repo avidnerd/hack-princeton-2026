@@ -19,7 +19,7 @@ const REASON_TEXT = {
 const STATE_TEXT = {
   BOOT: "Starting", HOMING: "Moving home", IDLE: "Idle", LISTENING: "Ready for a bite",
   SCOOPING: "Scooping", LIFTING: "Lifting", PRE_DELIVERY_HOLD: "Waiting for you", DELIVERING: "Coming to you",
-  MOUTH_HOLD: "Holding still", RETREAT: "Moving away", PAUSED: "Paused", FAULT: "Taking a break", STOPPED: "STOPPED",
+  MOUTH_HOLD: "Holding still", RETREAT: "Moving away", PAUSED: "Paused", FAULT: "Taking a break", STOPPED: "Stopped",
 };
 
 async function post(path, body = {}, method = "POST") {
@@ -28,7 +28,7 @@ async function post(path, body = {}, method = "POST") {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) toast(j.detail || r.statusText);
     return j;
-  } catch (e) { toast("server unreachable"); return {}; }
+  } catch (e) { toast("Can't reach Spoonful. Is it still running?"); return {}; }
 }
 async function get(path) { const r = await fetch("/api/" + path); return r.json(); }
 let toastUntil = 0;
@@ -47,7 +47,7 @@ function render() {
   const f = S.fsm, st = f.state;
   $("state-badge").textContent = STATE_TEXT[st] || st;
   const v = $("verdict");
-  if (st === "STOPPED") { v.textContent = "STOPPED"; v.className = "verdict stop"; }
+  if (st === "STOPPED") { v.textContent = "Stopped"; v.className = "verdict stop"; }
   else if (st === "FAULT") { v.textContent = "Taking a break"; v.className = "verdict stop"; }
   else if (["PRE_DELIVERY_HOLD", "DELIVERING", "MOUTH_HOLD"].includes(st)) {
     v.textContent = REASON_TEXT[f.gate.reason] ?? f.gate.reason; v.className = "verdict " + (f.gate.ok ? "ok" : "wait");
@@ -61,15 +61,15 @@ function render() {
   if (st === "FAULT") { banner.textContent = "Fault: " + f.fault + ". Arm parked. Check it, then Reset."; banner.classList.remove("hidden"); }
   else if (st === "STOPPED") { banner.textContent = f.stop_release_armed ? "Button pressed. Press Reset to confirm."
       : "Stopped. Press the physical STOP button (or spacebar), then Reset."; banner.classList.remove("hidden"); }
-  else if (f.calibration_mode) { banner.textContent = "CALIBRATION MODE: nobody in the chair"; banner.classList.remove("hidden"); }
+  else if (f.calibration_mode) { banner.textContent = "Calibration mode is on. Nobody in the chair."; banner.classList.remove("hidden"); }
   else if (Date.now() > toastUntil) banner.classList.add("hidden");
 
   $("btn-reset").classList.toggle("hidden", !(st === "FAULT" || st === "STOPPED"));
-  $("btn-pause").textContent = st === "PAUSED" ? "RESUME" : "PAUSE";
+  $("btn-pause").textContent = st === "PAUSED" ? "Resume" : "Pause";
   $("btn-bite").disabled = st !== "LISTENING";
   $("btn-session").textContent = f.session.active ? "End session" : "Start session";
   $("bites").textContent = f.session.active ? f.session.taken : (S.fsm.session.bites || 0);
-  $("pace").textContent = S.pace.label;
+  $("pace").textContent = cap(S.pace.label.replace(/^(learned )?pace: /, "$1"));
 
   const sel = $("profile");
   if (sel.options.length !== S.profiles.length) {
@@ -78,19 +78,30 @@ function render() {
   if (document.activeElement !== sel) sel.value = S.profile.name;
 
   $("timeline").innerHTML = (S.timeline || []).slice().reverse().map((e) => {
+    const txt = describe(e);
+    if (!txt) return "";
     const t = new Date(e.ts * 1000).toLocaleTimeString([], { hour12: false });
-    let txt;
-    if (e.kind === "fault") txt = `<span class="fault">fault ${esc(compact(e.detail))}</span>`;
-    else if (e.kind === "bite") txt = `bite: <b>${esc(e.outcome || "")}</b>`;
-    else if (e.type === "state") txt = `${e.from} → <b>${e.to}</b> <span class="muted">${esc(e.detail?.why || "")}</span>`;
-    else txt = `${esc(e.type || e.kind)} ${esc(compact(e.detail))}`;
     return `<li><time>${t}</time><span>${txt}</span></li>`;
   }).join("");
 
   if (!$("drawer").classList.contains("hidden")) renderDrawer();
 }
+// The activity list says what happened in plain words. Everything else stays in the Log tab.
+function describe(e) {
+  const d = e.detail || {};
+  if (e.kind === "fault") return `<span class="fault">Fault: ${esc(String(d.kind || "").replace(/_/g, " "))}</span>`;
+  if (e.kind === "bite") return `Bite ${esc(e.outcome || "")}`;
+  if (e.type === "state") return e.to === "FAULT" || e.to === "BOOT" ? "" : esc(STATE_TEXT[e.to] || e.to);
+  if (e.type === "speech" && !d.silent) return `Said "${esc(d.detail_line || "")}"`;
+  if (e.type === "food_selected") return `Chose ${esc(d.food || "")}`;
+  if (e.type === "attack_plan") return `${esc(STRATEGY_TEXT[d.strategy] || "Scoop")}: ${esc(d.why || "")}`;
+  if (e.type === "bowl_refused") return `Not scooping: ${esc(d.why || "")}`;
+  if (e.type === "photo_map") return "Table mapped";
+  if (e.type === "setup_mouth") return "Mouth position saved";
+  if (e.type === "face_center") return "Looking direction saved";
+  return "";
+}
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const compact = (d) => !d ? "" : Object.entries(d).filter(([k]) => k !== "why").map(([k, v]) => `${k.replace("detail_", "")}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
 
 // ------------------------------------------------------------------ main buttons
 $("btn-stop").onclick = () => post("stop", { source: "ui" });
@@ -127,6 +138,7 @@ function toggleDrawer(open) {
   if (show) { loadTraj(); loadCfg(); }
 }
 $("btn-operator").onclick = () => toggleDrawer();
+if (location.hash === "#setup") toggleDrawer(true);
 $("drawer-close").onclick = () => toggleDrawer(false);
 $("tabs").onclick = (e) => {
   const t = e.target.dataset.tab; if (!t) return;
@@ -144,6 +156,7 @@ function renderDrawer() {
     `<div>tip (mm)<b>${a.tip_mm ? a.tip_mm.join(", ") : "-"}</b>${a.in_face_zone ? "IN face zone" : "outside face zone"}</div>` +
     `<div>arm<b>${a.mode}</b>torque ${a.torque ? "on" : "off"} · ${a.voltage ?? "?"} V</div>` +
     `<div>teach<b>${S.teach.recording ? "REC " + S.teach.samples : "-"}</b>${S.teach.name || ""}</div>`;
+  renderSetup();
   const labels = ["nominal", "left", "right", "up", "down", "away", "toward"];
   const have = new Set(S.calib.samples.map((s) => s.label));
   $("calib-labels").innerHTML = labels.map((l) => `<button data-label="${l}" class="${have.has(l) ? "primary" : ""}">${l}</button>`).join("");
@@ -155,59 +168,123 @@ $("jog").innerHTML = JOINTS.map((j) => `<span>${j}</span>` + [-5, -1, 1, 5].map(
   `<button data-j="${j}" data-d="${d}">${d > 0 ? "+" : ""}${d}°</button>`).join("")).join("");
 $("jog").onclick = (e) => { const b = e.target; if (b.dataset.j) post("jog", { joint: b.dataset.j, deg: +b.dataset.d }); };
 
-const setupLog = (t) => { $("setup-out").textContent = t; };
-for (const n of [1, 2]) {
-  $(`setup-b${n}`).onclick = () => post("setup/bowl", { bowl: `bowl${n}` }).then((r) => {
-    if (r.ok) setupLog(`Bowl ${n} saved` + (r.seen ? ` — camera sees ${r.food || "a bowl"}` : " — camera couldn't see the bowl (type its food in the Plate tab later)"));
-  });
+// ------------------------------------------------------------------ setup (Setup tab)
+const STRATEGY_TEXT = { skim: "Skim", dig: "Dig", stab_and_saw: "Stab and saw", scrape: "Scrape", ladle: "Ladle" };
+const AMOUNT_TEXT = { full: "full", half: "half full", low: "nearly empty", empty: "empty" };
+const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const cap = (t) => t ? t[0].toUpperCase() + t.slice(1) : "";
+let photoShown = "";
+let fileBusy = false;
+
+function chip(id, text, done) {
+  const c = $(id);
+  c.textContent = text;
+  c.closest(".step").classList.toggle("done", !!done);
 }
-$("setup-mouth").onclick = () => post("setup/mouth").then((r) => { if (r.ok) setupLog("Mouth saved. Torque on, then Build moves."); });
-$("setup-build").onclick = () => post("setup/build").then((r) => {
-  if (r.ok) { setupLog(`Built: ${r.moves.join(", ")}. Bowls: ${r.bowls.join(", ")}. Try a bite!`); loadTraj(); }
-});
-$("photo-pose").onclick = () => post("photo/pose").then((r) => { if (r.ok) $("photo-out").textContent = "Spoon in place. Take the photo from straight above."; });
+function showPhoto(mapped) {
+  const img = $("photo-img");
+  img.src = `/api/phone/photo.jpg?mapped=${mapped ? 1 : 0}&t=${Date.now()}`;
+  img.classList.remove("hidden");
+}
+function renderSetup() {
+  const u = S.setup;
+  if (!u) return;
+  const idle = S.fsm.state === "IDLE";
+
+  chip("s-mouth-chip", u.mouth.set ? (u.mouth.at ? `Saved ${clock(u.mouth.at)}` : "Saved earlier") : "Not set", u.mouth.set);
+  $("s-release").disabled = !idle || u.mouth.released;
+  $("s-mouth-save").disabled = !idle;
+  $("s-mouth-hint").textContent = !idle ? "End the session to change this."
+    : u.mouth.released ? "The arm is released. Support it." : "";
+
+  const bowls = u.table.bowls;
+  chip("s-table-chip", bowls.length ? `${bowls.length} bowl${bowls.length > 1 ? "s" : ""} mapped ${clock(u.table.at)}` : "Not mapped", bowls.length);
+  $("photo-pose").textContent = u.table.posed ? "Spoon is in place" : "Pose for photo";
+  $("photo-pose").disabled = !idle || u.table.posed;
+  const ph = u.phone;
+  if (ph) {
+    const qr = $("phone-qr");
+    if (qr.dataset.url !== ph.url) {
+      qr.dataset.url = ph.url;
+      qr.src = "/api/phone/qr.svg?u=" + encodeURIComponent(ph.url);
+      $("phone-url").textContent = ph.url.replace("http://", "");
+    }
+    if (!fileBusy) {
+      const out = $("photo-out");
+      out.textContent = { waiting: "Waiting for a photo", mapping: "Photo received. Finding the bowls." }[ph.status] || ph.message;
+      out.classList.toggle("bad", ph.status === "problem");
+    }
+    const key = ph.count + ph.status;
+    if (ph.count && key !== photoShown) { photoShown = key; showPhoto(ph.status === "done"); }
+  }
+  $("s-bowls").innerHTML = bowls.map((b) =>
+    `<li><b>${esc(cap(b.food) || "Food")}</b><span>${esc(STRATEGY_TEXT[b.strategy] || "")} · ${esc(AMOUNT_TEXT[b.amount] || "")}</span>` +
+    `<span class="why">${esc(cap(b.why))}</span></li>`).join("") +
+    u.table.skipped.map((b) => `<li class="skipped"><b>${esc(cap(b.food))}</b><span>Not used: ${esc(b.why)}</span></li>`).join("");
+
+  chip("s-look-chip", u.looking.at ? `Saved ${clock(u.looking.at)}` : "Not set", u.looking.at);
+  const ready = u.mouth.set && bowls.length && u.looking.at;
+  chip("s-ready-chip", ready ? "Ready" : "Finish the steps above", ready);
+  if (bowls.length) {
+    $("s-ready-text").textContent = `Say "Spoonful, give me the ${bowls[0].food || "food"}", then press GO. ` +
+      "Press GO again when the spoon is waiting in front of you.";
+  }
+}
+
+$("s-release").onclick = () => post("torque", { on: false });
+$("s-mouth-save").onclick = () => post("setup/mouth/save").then((r) => { if (r.ok) loadTraj(); });
+$("s-done").onclick = () => toggleDrawer(false);
+$("photo-pose").onclick = () => post("photo/pose");
 $("photo-go").onclick = () => {
   const f = $("photo-file").files[0];
-  if (!f) { toast("choose the photo first"); return; }
-  $("photo-out").textContent = "Reading the photo...";
+  if (!f) { toast("Choose a photo first."); return; }
+  fileBusy = true;
+  $("photo-out").textContent = "Finding the bowls.";
+  $("photo-out").classList.remove("bad");
   const rd = new FileReader();
   rd.onload = () => post("photo/upload", { image: rd.result }).then((r) => {
-    if (r.ok) {
-      $("photo-out").textContent = r.report.join(" | ");
-      $("photo-img").src = "/api/photo/annotated?t=" + Date.now(); $("photo-img").style.display = "block";
-      loadTraj();
-    } else $("photo-out").textContent = "";
+    fileBusy = false;
+    if (r.ok) { $("photo-out").textContent = `${r.bowls.length} bowl${r.bowls.length > 1 ? "s" : ""} mapped`; showPhoto(true); loadTraj(); }
+    else { $("photo-out").textContent = r.detail || "Mapping failed."; $("photo-out").classList.add("bad"); }
   });
   rd.readAsDataURL(f);
 };
-$("setup-clear").onclick = () => post("setup/clear").then(() => setupLog("Cleared."));
-$("teach-start").onclick = () => post("teach/start", { name: $("teach-name").value, kind: "path" });
-$("teach-stop").onclick = () => post("teach/stop").then((r) => { if (r.ok) { $("plan").textContent = `saved ${r.name}: ${r.waypoints} waypoints`; loadTraj(); } });
-$("pose-save").onclick = () => post("teach/pose", { name: $("pose-name").value }).then((r) => { if (r.ok) { $("plan").textContent = `saved ${r.name}: ${JSON.stringify(r.deg)}`; loadTraj(); } });
-$("spoon-touch").onclick = () => post("spoon/touch").then((r) => {
-  if (r.ok) $("spoon-out").textContent = `${r.n} touch${r.n > 1 ? "es" : ""} (this one tilted ${r.tilt_deg} deg)`;
+for (const n of [1, 2]) {
+  $(`setup-b${n}`).onclick = () => post("setup/bowl", { bowl: `bowl${n}` }).then((r) => {
+    if (r.ok) $("setup-out").textContent = `Bowl ${n} saved. ` + (r.seen ? `The camera sees ${r.food || "a bowl"}.` : "Name its food in the Bowls tab.");
+  });
+}
+$("setup-build").onclick = () => post("setup/build").then((r) => {
+  if (r.ok) { $("setup-out").textContent = `Moves built for ${r.bowls.length} bowl${r.bowls.length > 1 ? "s" : ""}.`; loadTraj(); }
 });
-$("spoon-clear").onclick = () => post("spoon/clear").then(() => { $("spoon-out").textContent = "cleared"; });
+$("teach-start").onclick = () => post("teach/start", { name: $("teach-name").value, kind: "path" });
+$("teach-stop").onclick = () => post("teach/stop").then((r) => { if (r.ok) { $("plan").textContent = `Saved ${r.name} (${r.waypoints} points)`; loadTraj(); } });
+$("pose-save").onclick = () => post("teach/pose", { name: $("pose-name").value }).then((r) => { if (r.ok) { $("plan").textContent = `Saved ${r.name}`; loadTraj(); } });
+$("spoon-touch").onclick = () => post("spoon/touch").then((r) => {
+  if (r.ok) $("spoon-out").textContent = `${r.n} of 3 touches saved`;
+});
+$("spoon-clear").onclick = () => post("spoon/clear").then(() => { $("spoon-out").textContent = ""; });
 $("spoon-fit").onclick = () => post("spoon/fit").then((r) => {
-  if (r.ok) $("spoon-out").textContent = `Spoon: ${r.tool_mm} mm long, tip ${r.tool_offset_mm} mm off the gripper line ` +
-    `(was ${r.was[0]} / ${r.was[1]}), fit error ${r.rms_mm} mm. Saved.`;
+  if (r.ok) $("spoon-out").textContent = `Saved: spoon tip is ${r.tool_mm} mm from the wrist (fit error ${r.rms_mm} mm).`;
 });
 $("face-center").onclick = async () => {
-  const btn = $("face-center"); btn.disabled = true;
+  const btn = $("face-center");
+  btn.disabled = true;
   await post("speak", { text: "Look at the spoon" });
   for (let n = 5; n > 0; n--) {                       // time to turn from the laptop to the spoon
-    btn.textContent = `Look at the spoon... ${n}`;
+    btn.textContent = `Look at the spoon: ${n}`;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  btn.textContent = "Hold still...";
-  const r = await post("face/center");
-  btn.textContent = "I'm looking at the arm"; btn.disabled = false;
-  if (r.ok) toast(`Saved: looking at the arm = head turned ${r.yaw_center_deg} deg, tilted ${r.pitch_offset_deg} deg`);
+  btn.textContent = "Hold still";
+  await post("face/center");
+  btn.textContent = "Start countdown";
+  btn.disabled = false;
 };
 setInterval(() => {
-  const f = S && S.face; if (!f || !$("face-live")) return;
-  $("face-live").textContent = f.present ? `now: turn ${(+f.yaw_deg).toFixed(0)} deg, tilt ${(+f.pitch_deg).toFixed(0)} deg, ` +
-    `mouth ${f.jaw_open >= 0 ? "jaw " + (+f.jaw_open).toFixed(2) : "ratio " + (+f.mouth_open_ratio).toFixed(2)}` : "no face";
+  const f = S && S.face;
+  if (!f) return;
+  $("face-live").textContent = !f.present ? "No face in view"
+    : `Head turn ${(+f.yaw_deg).toFixed(0)}°, tilt ${(+f.pitch_deg).toFixed(0)}°, mouth open ${f.jaw_open >= 0 ? (+f.jaw_open).toFixed(2) : "?"}`;
 }, 300);
 $("torque-off").onclick = () => post("torque", { on: false });
 $("torque-on").onclick = () => post("torque", { on: true });
@@ -281,30 +358,27 @@ function renderPlate() {
   const p = S && S.plate;
   const line = $("plate-line");
   if (!p || !p.enabled) { line.classList.add("hidden"); return; }
-  const foods = p.bowls.map((b) => b.food ? (b.empty ? `${b.food} (finished)` : b.food) : null).filter(Boolean);
-  const now = S.fsm.bowl || S.fsm.last_bowl;
-  const cur = p.bowls.find((b) => b.name === now);
-  line.textContent = (foods.length ? "On the plate: " + foods.join(" · ") : "On the plate: (not seen yet)") +
-    (cur && cur.food ? `   → ${S.fsm.bowl ? "now" : "next"}: ${cur.food} (${cur.texture} scoop)` : "");
+  const foods = p.bowls.filter((b) => b.food).map((b) => cap(b.food) + (b.empty ? " (finished)" : ""));
+  const next = p.bowls.find((b) => b.name === (S.fsm.bowl || S.fsm.last_bowl));
+  line.textContent = (foods.length ? foods.join(" · ") : "No food seen yet") +
+    (next && next.food ? `   ${S.fsm.bowl ? "Now" : "Next"}: ${cap(next.food)}` : "");
   line.classList.remove("hidden");
-  $("plate-status").textContent = `vision: ${p.vision}` + (p.error ? ` — ${p.error}` : "") +
-    (p.last_check_age_s != null ? ` — checked ${p.last_check_age_s}s ago` : "");
+  $("plate-status").textContent = p.error ? `Vision problem: ${p.error}` : "Name a food to correct what the camera saw.";
   const key = JSON.stringify(p.bowls) + S.fsm.state;
   if (key === plateKey) return;            // don't rebuild while someone is typing
-  if (document.activeElement && (document.activeElement.classList.contains("bowl-food") ||
-      document.activeElement.classList.contains("bowl-tex"))) return;
+  const active = document.activeElement;
+  if (active && (active.classList.contains("bowl-food") || active.classList.contains("bowl-tex"))) return;
   plateKey = key;
   $("plate-bowls").innerHTML = p.bowls.map((b) => `<div class="bowl-row">
-      <b>${esc(b.name)}</b>
-      <span class="${b.empty ? "empty" : ""}">${esc(b.food || "?")}${b.amount ? " (" + esc(b.amount) + ")" : ""}</span>
-      <small>[${esc(b.source || "unknown")}; scoop: ${esc(b.scoop)}]</small>
-      <select class="bowl-tex" data-bowl="${esc(b.name)}" title="how hard to scoop (${esc(b.texture_why)})">
-        <option value="">auto: ${esc(b.texture)}</option>
+      <b class="${b.empty ? "empty" : ""}">${esc(cap(b.food) || "Unknown food")}</b>
+      <span class="meta">${esc([AMOUNT_TEXT[b.amount], STRATEGY_TEXT[b.attack && b.attack.strategy]].filter(Boolean).join(" · "))}</span>
+      <input class="bowl-food" data-bowl="${esc(b.name)}" placeholder="Rename" size="12" aria-label="Food name">
+      <button data-set="${esc(b.name)}">Save name</button>
+      <select class="bowl-tex" data-bowl="${esc(b.name)}" aria-label="Texture">
+        <option value="">Texture: ${esc(b.texture)}</option>
         ${["liquid", "soft", "thick", "firm"].map((t) => `<option value="${t}" ${b.texture_why === "operator" && b.texture === t ? "selected" : ""}>${t}</option>`).join("")}
       </select>
-      <input class="bowl-food" data-bowl="${esc(b.name)}" placeholder="type food to override" size="14">
-      <button data-set="${esc(b.name)}">Set</button>
-      <button data-bowlbite="${esc(b.name)}" ${S.fsm.state === "LISTENING" ? "" : "disabled"}>Bite from ${esc(b.name)}</button>
+      <button data-bowlbite="${esc(b.name)}" ${S.fsm.state === "LISTENING" ? "" : "disabled"}>Bite of this</button>
     </div>`).join("");
 }
 $("ask-go").onclick = () => {

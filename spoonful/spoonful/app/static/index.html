@@ -19,14 +19,14 @@
     <div class="verdict" id="verdict">Starting</div>
     <div class="explain" id="explain"></div>
     <div class="plate-line hidden" id="plate-line"></div>
-    <div class="row ask-row"><input id="ask-text" placeholder='Ask Spoonful... e.g. "a little of each"' size="34">
+    <div class="row ask-row"><input id="ask-text" placeholder="Ask for a food, or a little of each" size="34" aria-label="Ask Spoonful">
       <button id="ask-go">Ask</button></div>
   </section>
 
   <aside class="side">
     <button class="stop" id="btn-stop" title="Spacebar">STOP</button>
     <div class="row">
-      <button class="big" id="btn-pause">PAUSE</button>
+      <button class="big" id="btn-pause">Pause</button>
       <button class="big primary" id="btn-bite">Bite</button>
     </div>
     <div class="row">
@@ -43,154 +43,177 @@
     <ol class="timeline" id="timeline"></ol>
     <div class="foot">
       <a href="/caregiver">Caregiver view</a>
-      <button class="link" id="btn-operator">Operator (o)</button>
+      <button class="link" id="btn-operator">Setup and tools</button>
     </div>
   </aside>
 </main>
 
 <div class="drawer hidden" id="drawer">
   <header>
-    <h2>Operator</h2>
+    <h2>Setup and tools</h2>
     <nav class="tabs" id="tabs">
-      <button data-tab="teach" class="on">Teach</button>
+      <button data-tab="setup" class="on">Setup</button>
+      <button data-tab="plate">Bowls</button>
+      <button data-tab="teach">Moves</button>
       <button data-tab="calibrate">Calibrate</button>
       <button data-tab="config">Thresholds</button>
       <button data-tab="health">Health</button>
-      <button data-tab="plate">Plate</button>
-      <button data-tab="sim">Sim</button>
+      <button data-tab="sim">Simulator</button>
       <button data-tab="log">Log</button>
     </nav>
     <button class="link" id="drawer-close">Close</button>
   </header>
 
-  <section data-pane="teach">
-    <h3>Quick setup (new table, about 2 minutes)</h3>
-    <p class="note">Sit where you'll eat, bowls where they'll be. Click <b>Torque off</b> (below) and support the arm.
-      Dip the spoon into the first bowl and press <b>Spoon is in bowl 1</b>; same for bowl 2. Then touch the spoon to
-      your lips and press <b>Spoon is at my mouth</b>. Click <b>Torque on</b>, then <b>Build moves</b>: the robot works
-      out every scoop, the lift, the waiting spot and the face zone from those touches. The camera names each food.</p>
-    <div class="row wrap">
-      <button id="setup-b1">Spoon is in bowl 1</button><button id="setup-b2">Spoon is in bowl 2</button>
-      <button id="setup-mouth">Spoon is at my mouth</button>
-      <button id="setup-build" class="primary">Build moves</button><button id="setup-clear">Start over</button>
-    </div>
-    <div id="setup-out" class="note"></div>
-    <h3>Photo setup (no touching the bowls)</h3>
-    <p class="note">Mouth set first (Quick setup). Clear the space in front of the arm and press <b>Pose for photo</b>:
-      the spoon tip goes to a known spot. Take ONE photo from straight above with your phone, showing the arm's base,
-      the spoon and all the bowls. Choose it below and press <b>Map the table</b>: the robot finds every bowl and builds
-      a scoop for each, by itself.</p>
-    <div class="row wrap"><button id="photo-pose">Pose for photo</button>
-      <input type="file" id="photo-file" accept="image/*"><button id="photo-go" class="primary">Map the table</button></div>
-    <div id="photo-out" class="note"></div>
-    <img id="photo-img" alt="map of the table" style="max-width:100%;display:none">
-    <h3>Record by hand</h3>
-    <p class="note">Only in IDLE. Torque turns off on the arm joints while recording: support the arm.</p>
+  <section data-pane="setup">
+    <ol class="steps">
+      <li class="step" id="s-step-1">
+        <div class="step-head"><h3>Your mouth</h3><span class="chip" id="s-mouth-chip">Not set</span></div>
+        <p>Release the arm, bring the spoon to your lips, then save.</p>
+        <div class="row wrap">
+          <button id="s-release">Release arm</button>
+          <button id="s-mouth-save" class="primary">Save mouth position</button>
+        </div>
+        <p class="hint" id="s-mouth-hint"></p>
+      </li>
+
+      <li class="step" id="s-step-2">
+        <div class="step-head"><h3>The table</h3><span class="chip" id="s-table-chip">Not mapped</span></div>
+        <p>Move the spoon into place, then scan the code and take one photo from straight above.</p>
+        <div class="phone-row">
+          <img id="phone-qr" class="qr" alt="QR code that opens the photo page on your phone" width="150" height="150">
+          <div class="phone-side">
+            <button id="photo-pose">Pose for photo</button>
+            <p class="status" id="photo-out">Waiting for a photo</p>
+            <p class="mono" id="phone-url"></p>
+          </div>
+        </div>
+        <img id="photo-img" class="photo hidden" alt="The table photo with the bowls marked">
+        <ul class="bowl-list" id="s-bowls"></ul>
+        <details>
+          <summary>Use a photo file instead</summary>
+          <div class="row wrap"><input type="file" id="photo-file" accept="image/*"><button id="photo-go">Map the table</button></div>
+        </details>
+        <details>
+          <summary>Set the bowls by touch instead</summary>
+          <p>Release the arm, dip the spoon into each bowl and press its button. Then build the moves.</p>
+          <div class="row wrap">
+            <button id="setup-b1">Spoon is in bowl 1</button><button id="setup-b2">Spoon is in bowl 2</button>
+            <button id="setup-build" class="primary">Build moves</button>
+          </div>
+          <p class="status" id="setup-out"></p>
+        </details>
+      </li>
+
+      <li class="step" id="s-step-3">
+        <div class="step-head"><h3>Looking at the arm</h3><span class="chip" id="s-look-chip">Not set</span></div>
+        <p>Start the countdown, turn to the spoon the way you will when eating, and hold still.</p>
+        <div class="row wrap">
+          <button id="face-center">Start countdown</button>
+          <span class="mono" id="face-live"></span>
+        </div>
+      </li>
+
+      <li class="step" id="s-step-4">
+        <div class="step-head"><h3>Eat</h3><span class="chip" id="s-ready-chip">Finish the steps above</span></div>
+        <p id="s-ready-text">Ask for a food by name, then press GO. Press GO again when the spoon is waiting in front of you.</p>
+        <div class="row wrap"><button id="s-done" class="primary">Close setup</button></div>
+      </li>
+    </ol>
+  </section>
+
+  <section data-pane="plate" class="hidden">
+    <p class="note" id="plate-status"></p>
+    <div id="plate-bowls"></div>
+    <details>
+      <summary>Webcam view of the bowls</summary>
+      <div class="row wrap">
+        <button id="plate-check">Check the food now</button>
+        <button id="plate-img-refresh">Refresh picture</button>
+      </div>
+      <img id="plate-img" class="photo" alt="Webcam picture with each bowl's box">
+    </details>
+    <details>
+      <summary>Follow a bowl with the webcam</summary>
+      <p>The arm holds the spoon over the table at about 12 spots while the webcam finds its tip. Clear the table
+        first. Needs the spoon measured (Calibrate).</p>
+      <div class="row wrap"><button id="table-auto">Calibrate the table</button>
+        <button id="table-auto-stop">Stop</button></div>
+      <div class="row wrap"><label><input type="checkbox" id="table-mode"> Add a spot by clicking the picture</label>
+        <button id="table-clear">Clear spots</button></div>
+      <p class="status" id="table-status"></p>
+    </details>
+  </section>
+
+  <section data-pane="teach" class="hidden">
+    <p class="note">Recording releases the arm. Support it before you start.</p>
+    <h3>Record a path</h3>
     <div class="row wrap">
       <select id="teach-name">
         <option>scoop</option><option>scoop_small</option><option>scoop_full</option><option>lift</option>
         <option>present</option><option>retreat</option>
         <option>scoop_bowl1</option><option>scoop_bowl2</option><option>scoop_bowl3</option>
       </select>
-      <button id="teach-start">Record path</button>
-      <button id="teach-stop" class="primary big">DONE</button>
+      <button id="teach-start">Record</button>
+      <button id="teach-stop" class="primary">Done</button>
     </div>
+    <h3>Save a pose</h3>
     <div class="row wrap">
       <select id="pose-name"><option>rest</option><option>pre_delivery</option><option>mouth_nominal</option></select>
       <button id="pose-save">Save current pose</button>
-      <button id="torque-off">Torque off</button><button id="torque-on">Torque on</button>
+      <button id="torque-off">Release arm</button><button id="torque-on">Hold arm</button>
     </div>
     <div class="joints" id="joints"></div>
+    <h3>Replay</h3>
     <div class="row wrap">
       <select id="replay-name"></select>
-      <label>speed <input id="replay-speed" type="number" value="0.8" step="0.1" min="0.1" max="1"></label>
-      <button id="replay-dry">Dry run</button>
-      <button id="replay-live">Replay live</button>
+      <label>Speed <input id="replay-speed" type="number" value="0.8" step="0.1" min="0.1" max="1"></label>
+      <button id="replay-dry">Preview</button>
+      <button id="replay-live">Run on the arm</button>
     </div>
     <pre id="plan" class="plan"></pre>
     <table class="traj" id="traj"></table>
   </section>
 
   <section data-pane="calibrate" class="hidden">
-    <h3>Where "looking" is</h3>
-    <p class="note">Sit in the chair and press this. You get 5 seconds (it says "Look at the spoon") to turn your
-      head to the spoon the way you will when eating; hold still until it says "Got it". The face check then treats
-      that direction as "looking at the arm".</p>
-    <div class="row wrap"><button id="face-center" class="primary">I'm looking at the arm</button>
-      <span id="face-live" class="note"></span></div>
     <h3>Spoon length</h3>
-    <p class="note">Teaches the robot where the spoon TIP really is (needed after re-taping the spoon). Teach &gt;
-      Torque off, then rest the spoon tip lightly on the table and press <b>Tip is on the table</b>. Do it 3 times
-      with different tilts: spoon steep, medium, nearly flat. Then <b>Fit spoon</b>.</p>
+    <p class="note">Release the arm and rest the spoon tip on the table three times, each at a different tilt.</p>
     <div class="row wrap"><button id="spoon-touch">Tip is on the table</button>
-      <button id="spoon-fit" class="primary">Fit spoon</button><button id="spoon-clear">Clear</button>
-      <span id="spoon-out" class="note"></span></div>
-    <p class="note">Calibration mode allows approach without a diner. Nobody in the chair.</p>
-    <div class="row wrap">
-      <button id="calib-on">Calibration mode ON</button><button id="calib-off">OFF</button>
-    </div>
-    <h3>Offset map</h3>
-    <p class="note">For each label: move the spoon (hand with torque off, or jog), then click the tip on the camera image.</p>
-    <p class="note">Optional depth: <b>away</b> = tip moved 30 mm straight away from the camera (it should barely
-      move in the image); <b>toward</b> = 30 mm toward it. Tape-measure lens to tip at nominal for exact depth.</p>
+      <button id="spoon-fit" class="primary">Fit spoon</button><button id="spoon-clear">Clear</button></div>
+    <p class="status" id="spoon-out"></p>
+    <h3>Calibration mode</h3>
+    <p class="note">Lets the arm approach the mouth position with nobody in the chair.</p>
+    <div class="row wrap"><button id="calib-on">Turn on</button><button id="calib-off">Turn off</button></div>
+    <h3>Mouth tracking map</h3>
+    <p class="note">For each label, move the spoon there and click its tip on the camera picture.</p>
     <div class="row wrap" id="calib-labels"></div>
-    <label>lens to tip at nominal (mm, optional) <input id="calib-depth" type="number" min="150" max="1500" placeholder="from FOV"></label>
+    <label>Lens to spoon tip, mm (optional) <input id="calib-depth" type="number" min="150" max="1500"></label>
     <div class="jog" id="jog"></div>
     <div class="row wrap"><button id="calib-fit" class="primary">Fit map</button><button id="calib-clear">Clear samples</button></div>
     <pre id="calib-out" class="plan"></pre>
     <h3>Delivery window</h3>
-    <p class="note">Drag a box on the camera image after pressing this.</p>
-    <button id="window-draw">Draw window</button>
+    <div class="row wrap"><button id="window-draw">Draw on the camera picture</button></div>
   </section>
 
   <section data-pane="config" class="hidden">
     <div id="cfg"></div>
-    <button id="cfg-save">Save to config.yaml</button>
+    <div class="row wrap"><button id="cfg-save">Save to config.yaml</button></div>
   </section>
 
   <section data-pane="health" class="hidden">
     <pre id="health" class="plan"></pre>
   </section>
 
-  <section data-pane="plate" class="hidden">
-    <p class="note">Which food is in which bowl. Vision re-checks every few seconds while idle; type a name to
-      override it. Each bowl needs its own taught scoop (Teach: scoop_bowl1, ...). Say "Spoonful, a bite of the
-      applesauce" or "Spoonful, what's on my plate?".</p>
-    <div id="plate-status" class="note"></div>
-    <div id="plate-bowls"></div>
-    <div class="row wrap">
-      <button id="plate-check">Check now</button>
-      <button id="plate-img-refresh">Refresh picture</button>
-    </div>
-    <img id="plate-img" alt="plate camera with bowl boxes" style="max-width:100%;margin-top:8px;cursor:crosshair">
-    <h3>Follow the bowl</h3>
-    <p class="note"><b>Automatic (recommended):</b> first measure the spoon (Calibrate &gt; Spoon length). Then clear
-      the table within the arm's reach (cup, laptop edge, cables), end the session (IDLE), keep hands clear, and press
-      this. The arm holds the spoon tip 5 cm above about 15 spots, left to right, and the camera finds the tip at each
-      one (2-3 minutes). Then put the cup anywhere the camera sees and the arm can reach.</p>
-    <div class="row wrap"><button id="table-auto" class="primary">Calibrate automatically</button>
-      <button id="table-auto-stop">Stop calibration</button></div>
-    <p class="note">Manual instead:</p>
-    <p class="note">Teaches the camera where the table is, so a bowl that was moved a little (up to 6 cm) is still
-      scooped. Once, with the plate camera fixed in place: Teach &gt; Torque off, touch the spoon tip to the table at a
-      spot the camera can see, press <b>Refresh picture</b>, then click that exact spot in the picture. Do 4 to 6 spots,
-      spread around where the bowls go.</p>
-    <div class="row wrap"><label><input type="checkbox" id="table-mode"> clicking the picture adds a table spot</label>
-      <button id="table-clear">Clear table spots</button></div>
-    <div id="table-status" class="note"></div>
-  </section>
-
   <section data-pane="sim" class="hidden">
-    <p class="note">Simulated face (start with --sim-face) and simulated servos (--backend sim).</p>
+    <p class="note">Only when started with the simulated face or arm.</p>
     <div class="row wrap">
-      <label><input type="checkbox" id="sim-present" checked> face present</label>
-      <label><input type="checkbox" id="sim-open"> mouth open</label>
-      <label>yaw <input type="range" id="sim-yaw" min="-45" max="45" value="0"></label>
-      <label>dx <input type="range" id="sim-dx" min="-200" max="200" value="0"></label>
-      <label>lean back (mm) <input type="range" id="sim-dz" min="-120" max="120" value="0"></label>
+      <label><input type="checkbox" id="sim-present" checked> Face present</label>
+      <label><input type="checkbox" id="sim-open"> Mouth open</label>
+      <label>Head turn <input type="range" id="sim-yaw" min="-45" max="45" value="0"></label>
+      <label>Sideways <input type="range" id="sim-dx" min="-200" max="200" value="0"></label>
+      <label>Lean back <input type="range" id="sim-dz" min="-120" max="120" value="0"></label>
     </div>
     <div class="row wrap">
-      <button id="sim-block">Jam elbow (contact)</button><button id="sim-unblock">Release</button>
+      <button id="sim-block">Block the elbow</button><button id="sim-unblock">Unblock</button>
     </div>
   </section>
 

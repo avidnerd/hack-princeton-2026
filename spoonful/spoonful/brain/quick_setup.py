@@ -39,6 +39,9 @@ class SetupError(RuntimeError):
     pass
 
 
+SEEDS = ({"shoulder": 8.0, "elbow": -84.0, "wrist_pitch": 52.0},
+         {"shoulder": -22.0, "elbow": -16.0, "wrist_pitch": 84.0},
+         {"shoulder": 63.0, "elbow": -64.0, "wrist_pitch": 88.0})
 LIMITS: Optional[dict] = None          # soft limits, set by build_all (so _at only returns poses the arm can take)
 
 
@@ -49,11 +52,15 @@ def _ok(q: dict) -> bool:
 def _at(kin, ref: dict, r: float, z: float, angle: Optional[float] = None) -> dict:
     """ref's base and roll, tip at (r, z), spoon at `angle` (default: ref's). If that exact angle is out of reach or
     out of the joint limits, the closest angle that works (searching up to 50 deg either way)."""
-    tilt = 0.0 if angle is None else angle - _spoon_angle(kin, ref)
-    for extra in (0.0, 10.0, -10.0, 20.0, -20.0, 30.0, -30.0, 40.0, -40.0, 50.0, -50.0):
-        q = solve_rz(kin, ref, r, z, iters=30, tilt_deg=tilt + extra)
-        if q is not None and _ok(q):
-            return q
+    want = _spoon_angle(kin, ref) if angle is None else angle
+    # The solver is local (Newton from a starting pose), so one start can miss a reachable target. Try the given
+    # pose first, then a few arm shapes that cover the workspace: reaching down, reaching forward, folded up.
+    for seed in (ref, *SEEDS):
+        start = {**ref, **seed}
+        for extra in (0.0, 10.0, -10.0, 20.0, -20.0, 30.0, -30.0, 40.0, -40.0, 50.0, -50.0):
+            q = solve_rz(kin, start, r, z, iters=30, tilt_deg=want + extra - _spoon_angle(kin, start))
+            if q is not None and _ok(q):
+                return q
     raise SetupError(f"can't reach {r:.0f} mm out at {z:.0f} mm high from there within the joint limits")
 
 
@@ -121,10 +128,11 @@ def _check_move(cfg: Config, kin, start: dict, poses: list[dict], name: str, may
             raise SetupError(f"{name} would pass through the face zone at ({x:.0f}, {y:.0f}, {z:.0f}) mm")
 
 
-def build_all(cfg: Config, dips: dict[str, dict], mouth: dict, rest: dict) -> dict:
-    """{name: (kind, poses)} for every move, plus the face zone. Raises SetupError with a plain reason."""
+def build_all(cfg: Config, dips: dict[str, dict], mouth: dict, rest: dict, mouth_only: bool = False) -> dict:
+    """{name: (kind, poses)} for every move, plus the face zone. Raises SetupError with a plain reason.
+    mouth_only: just the mouth, the waiting pose and the face zone (the bowls come from a photo afterwards)."""
     global LIMITS
-    if not dips:
+    if not dips and not mouth_only:
         raise SetupError("touch the spoon into at least one bowl first")
     LIMITS = cfg.arm.soft_limits_deg
     zone = face_cyl(cfg.kinematics, mouth)
@@ -144,8 +152,9 @@ def build_all(cfg: Config, dips: dict[str, dict], mouth: dict, rest: dict) -> di
         out[f"scoop_{bowl}"] = ("path", scoop)
         out[f"lift_{bowl}"] = ("path", lift)
         first = first or (bowl, scoop, lift)
-    out["scoop"] = ("path", first[1])
-    out["lift"] = ("path", first[2])
+    if first:
+        out["scoop"] = ("path", first[1])
+        out["lift"] = ("path", first[2])
     # the approach (pre -> mouth) and the retreat go through the face zone by design: they are gated by the face
     # check + GO and by the leaving-the-zone rule at run time. Here only their joint limits are checked.
     check_limits(cfg, mouth, "mouth "), check_limits(cfg, pre, "pre_delivery ")

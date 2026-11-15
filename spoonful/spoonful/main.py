@@ -30,7 +30,7 @@ def cmd_run(args, page: str = "/") -> None:
     c0 = C.load(args.config)
     probe = socket.socket()
     try:                                     # a second copy would fight the first one for the arm: refuse early
-        probe.bind((c0.app.host, c0.app.port))
+        probe.bind(("0.0.0.0" if c0.app.phone_link else c0.app.host, c0.app.port))
     except OSError:
         print(f"Spoonful is already running (http://{c0.app.host}:{c0.app.port}/ is in use). Use that window, or "
               f"close it (Ctrl+C) before starting another.")
@@ -45,7 +45,8 @@ def cmd_run(args, page: str = "/") -> None:
     if args.open:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     try:
-        uvicorn.run(app, host=cfg.app.host, port=cfg.app.port, log_level="warning")
+        uvicorn.run(app, host="0.0.0.0" if cfg.app.phone_link else cfg.app.host, port=cfg.app.port,
+                    log_level="warning")
     finally:
         sys.stop()
 

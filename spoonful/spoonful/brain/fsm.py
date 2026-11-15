@@ -1055,14 +1055,14 @@ class FSM:
                    "paused": "paused", "stop_latched": "stopped"}
         return {
             S.BOOT: "Starting up", S.HOMING: "Moving to home",
-            S.IDLE: "Idle. Start a session to begin" + (" (CALIBRATION MODE: no diner)" if self.calibration_mode else ""),
-            S.LISTENING: "Waiting for a bite request", S.SCOOPING: "Scooping", S.LIFTING: "Lifting the spoon",
+            S.IDLE: "Press GO to begin" + (" (calibration mode: nobody in the chair)" if self.calibration_mode else ""),
+            S.LISTENING: "Ask for a food, or press GO", S.SCOOPING: "Scooping", S.LIFTING: "Lifting the spoon",
             S.PRE_DELIVERY_HOLD: (f"Holding: {reasons.get(v.reason, 'ready')}" if not v.ok
                                   else "Ready: press the button to bring the spoon" if not self._go_fresh(time.monotonic())
-                                  else "Permit: approaching"),
+                                  else "Coming to you"),
             S.DELIVERING: "Bringing the spoon to you" + (f" ({self.arm.servo_error_mm() / 10:.0f} cm to go)"
                                                          if self.arm.servo_error_mm() > 5 else ""), S.MOUTH_HOLD: "Holding still at your mouth",
-            S.RETREAT: "Moving the spoon away", S.PAUSED: "Paused. Say resume or press RESUME",
+            S.RETREAT: "Moving the spoon away", S.PAUSED: "Paused. Press Resume to continue",
             S.FAULT: f"Taking a break: {self.fault_reason}. Operator reset needed",
             S.STOPPED: ("STOPPED. Flip the STOP switch back on, then confirm in the app" if self.stop_switch_off
                         else "STOPPED. Press the STOP button, then confirm in the app"

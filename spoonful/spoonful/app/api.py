@@ -395,98 +395,33 @@ class PhotoUpload(BaseModel):
 
 @router.post("/photo/upload")
 def photo_upload(req: Request, b: PhotoUpload):
-    """One overhead photo -> map of the bowls in arm coordinates -> a scoop built for every reachable bowl."""
+    """An overhead photo chosen as a file on the laptop (the phone link posts to /api/phone/photo instead)."""
     import cv2
     import numpy as np
-    from ..brain.quick_setup import SetupError, build_lift, build_scoop_at, save_all
-    from ..brain import quick_setup as QS
-    from ..config import BowlCfg
-    from ..perception.photo_map import PROMPT, analyze_robust, decode_upload, predicted_surface_mm
+    from ..brain.photo_setup import SetupProblem, map_table
+    from ..perception.photo_map import decode_upload
     sys = _sys(req)
-    _need_idle(sys)
-    if sys.plate.image_generate is None:
-        raise HTTPException(409, "vision isn't available (Gemini key?)")
-    if not (sys.lib.has("pre_delivery") and sys.lib.has("mouth_nominal")):
-        raise HTTPException(409, "set the mouth first (Quick setup: Spoon is at my mouth, then Build moves)")
     img = cv2.imdecode(np.frombuffer(decode_upload(b.image), np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        raise HTTPException(400, "that isn't an image")
-    h, w = img.shape[:2]
-    k = 1600 / max(h, w)
-    if k < 1:
-        img = cv2.resize(img, (int(w * k), int(h * k)))
-        h, w = img.shape[:2]
-    try:   # 4 rotated views in parallel; only what they agree on is used (see photo_map.consensus)
-        m = analyze_robust(img, lambda data: sys.plate.image_generate(data, PROMPT))
-    except Exception as e:
-        raise HTTPException(409, f"couldn't read the photo: {e}")
-    kin = sys.cfg.kinematics
-    QS.LIMITS = sys.cfg.arm.soft_limits_deg
-    pre = sys.lib.pose("pre_delivery")
-    ref = min(sys.lib.items["scoop_bowl1"].poses, key=lambda q: K.fk(kin, q)[2]) if sys.lib.has("scoop_bowl1") \
-        else (sys.lib.pose("rest") if sys.lib.has("rest") else dict(sys.cfg.arm.home_pose))
-    moves, bowls, report = {}, [], []
-    for bw in [b for b in m["bowls"] if not b["name"]]:
-        report.append(f"unsure: {bw.get('food')} (seen in {bw['votes']} of {bw['views']} views) - not used; "
-                      f"type it in the Plate tab if it's real")
-    for bw in [b for b in m["bowls"] if b["name"]]:
-        x, y = bw["mm"]
-        surf = predicted_surface_mm(bw.get("amount"))
-        try:
-            scoop = build_scoop_at(kin, ref, x, y, surf)
-            for q in scoop:
-                if K.in_face_zone(kin, q):
-                    raise SetupError("too close to the face")
-            lift = build_lift(kin, scoop[-1], pre)
-            make_plan(sys.cfg, scoop[0], [(scoop, "normal", "check")])
-            make_plan(sys.cfg, scoop[-1], [(lift, "normal", "check")])
-        except Exception as e:
-            report.append(f"{bw['name']} ({bw.get('food')}): skipped, {e}")
-            continue
-        moves[f"scoop_{bw['name']}"] = ("path", scoop)
-        moves[f"lift_{bw['name']}"] = ("path", lift)
-        bx = [int(v) for v in bw["box_px"]]
-        pad = 15
-        crop = img[max(0, bx[1] - pad):bx[3] + pad, max(0, bx[0] - pad):bx[2] + pad]
-        crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        bowls.append(BowlCfg(name=bw["name"], roi=(0, 0, 1280, 720), label=bw.get("food") or "", watch=False))
-        bw["crop_jpg"] = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tobytes()
-        sys.food_surface.est[bw["name"]] = surf
-        report.append(f"{bw['name']}: {bw.get('food')} ({bw.get('amount')}), seen in {bw['votes']}/{bw['views']} views, "
-                      f"at {x / 10:.0f}, {y / 10:.0f} cm (+-{bw['uncertainty_mm'] / 10:.1f} cm), "
-                      f"food surface predicted {surf:.0f} mm up")
-    if not bowls:
-        raise HTTPException(409, "no reachable bowls in the photo: " + "; ".join(report))
-    moves["scoop"] = moves[[k for k in moves if k.startswith("scoop_")][0]]
-    save_all(sys.cfg, sys.lib.dir, {"moves": moves})
-    sys.cfg.plate.bowls = bowls
-    sys.cfg.save()
-    sys.lib.reload()
-    sys.plate.reset_bowls()
-    for bw in m["bowls"]:
-        if bw["name"] in sys.plate.bowls:
-            sys.plate.bowls[bw["name"]].update(amount=bw.get("amount"), vision_texture=bw.get("texture"))
-            a = sys.plate.plan_attack(bw["name"], bw.get("crop_jpg"))       # how to scoop it, from its close-up
-            next(c for c in sys.cfg.plate.bowls if c.name == bw["name"]).attack = a
-            report.append(f"{bw['name']} plan: {a['strategy'].replace('_', ' ')} at {a['entry_angle_deg']:.0f} deg, "
-                          f"{a['depth_mm']:.0f} mm in ({a['why']})")
-    sys.cfg.save()
-    # annotated copy for the operator
-    out = img.copy()
-    for p, col in ((m["base_px"], (255, 160, 0)), (m["tip_px"], (255, 0, 255))):
-        cv2.drawMarker(out, (int(p[0]), int(p[1])), col, cv2.MARKER_CROSS, 40, 4)
-    for bw in m["bowls"]:
-        c = (int(bw["px"][0]), int(bw["px"][1]))
-        ok = bw["name"] in {b.name for b in bowls}
-        col = (0, 200, 0) if ok else ((0, 165, 255) if not bw["name"] else (0, 0, 255))   # used / unsure / unreachable
-        bx = [int(v) for v in bw["box_px"]]
-        cv2.rectangle(out, (bx[0], bx[1]), (bx[2], bx[3]), col, 3)
-        cv2.circle(out, c, 8, col, -1)
-        cv2.putText(out, f"{bw['name'] or 'unsure'}: {bw.get('food')} {bw['votes']}/{bw['views']}", (bx[0], bx[1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, 2)
-    cv2.imwrite(str(sys.cfg.path("data/photo_map.jpg")), out)
-    sys.log.event("photo_map", detail_bowls=[b.name for b in bowls], report=report, mm_per_px=round(m["mm_per_px"], 3))
-    return {"ok": True, "bowls": [b.name for b in bowls], "report": report, "mm_per_px": round(m["mm_per_px"], 3)}
+        raise HTTPException(400, "That isn't an image.")
+    try:
+        return {"ok": True, **map_table(sys, img)}
+    except SetupProblem as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post("/setup/mouth/save")
+def setup_mouth_save(req: Request):
+    """The spoon is at the diner's lips: hold the arm there and save the mouth, waiting pose and face zone."""
+    from ..brain.photo_setup import SetupProblem, save_mouth
+    sys = _sys(req)
+    _need_idle(sys)
+    try:
+        r = save_mouth(sys)
+    except SetupProblem as e:
+        raise HTTPException(409, str(e))
+    sys.arm.torque(True)
+    return {"ok": True, **r}
 
 
 @router.get("/photo/annotated")
@@ -547,8 +482,10 @@ def setup_build(req: Request):
     sys = _sys(req)
     _need_idle(sys)
     st = _setup(sys)
+    if st["mouth"] is None and sys.lib.has("mouth_nominal"):
+        st["mouth"] = dict(sys.lib.pose("mouth_nominal"))        # saved in step 1 of Setup
     if st["mouth"] is None:
-        raise HTTPException(409, "touch the spoon to the mouth first")
+        raise HTTPException(409, "Set your mouth position first.")
     rest = sys.lib.pose("rest") if sys.lib.has("rest") else dict(sys.cfg.arm.home_pose)
     try:
         built = build_all(sys.cfg, st["dips"], st["mouth"], rest)
@@ -644,6 +581,7 @@ def face_center(req: Request):
     sys.cfg.set_path("face.yaw_center_deg", round(yaw, 1))
     sys.cfg.set_path("face.pitch_offset_deg", round(pitch, 1))
     sys.cfg.save()
+    sys.setup_state["looking_at"] = _t.time()
     sys.log.event("face_center", detail_yaw=round(yaw, 1), pitch=round(pitch, 1))
     sys.speaker.say_text("Got it")
     return {"ok": True, "yaw_center_deg": round(yaw, 1), "pitch_offset_deg": round(pitch, 1)}

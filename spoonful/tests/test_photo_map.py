@@ -2,6 +2,7 @@
 import base64
 import math
 import shutil
+import time
 
 import cv2
 import numpy as np
@@ -96,17 +97,32 @@ def test_photo_upload_builds_scoops_without_touching(sim_system, tmp_path, monke
     monkeypatch.setattr(PM.analyze_robust, "__defaults__", ((170.0, 0.0), (0,)))
     img = np.full((H, W, 3), 200, np.uint8)
     data = "data:image/jpeg;base64," + base64.b64encode(cv2.imencode(".jpg", img)[1].tobytes()).decode()
+    from conftest import wait_state
+    wait_state(s, "IDLE")
     c = TestClient(create_app(s))
+    assert c.post("/api/photo/upload", json={"image": data}).status_code == 409     # spoon not posed yet
+    assert c.post("/api/photo/pose").status_code == 200
+    t0 = time.time()
+    while s.arm.busy or time.time() - t0 < 0.5:
+        time.sleep(0.05)
+    PM_TIP = K.fk(kin, s.arm.state.deg)
+
+    def vision(jpg, prompt):                   # the fake camera sees the spoon tip where the arm really holds it
+        d = fake_vision(bowls)(jpg)
+        d["tip"] = norm(mm_to_px(PM_TIP[:2]))
+        return d
+    s.plate.image_generate = vision
     r = c.post("/api/photo/upload", json={"image": data})
     assert r.status_code == 200, r.text
-    j = r.json()
-    assert j["bowls"], j
-    for name in j["bowls"]:
+    names = [b["name"] for b in r.json()["bowls"]]
+    assert names
+    for name in names:
         assert s.lib.has(f"scoop_{name}") and s.lib.has(f"lift_{name}")
-    sc = s.lib.items[f"scoop_{j['bowls'][0]}"].poses
+    assert all(b["strategy"] for b in r.json()["bowls"])
+    sc = s.lib.items[f"scoop_{names[0]}"].poses
     low = min(sc, key=lambda q: K.fk(kin, q)[2])
     lx, ly, lz = K.fk(kin, low)
-    target = [b for b in bowls if b[1] == s.plate.food_of(j["bowls"][0])][0][0]
+    target = [b for b in bowls if b[1] == s.plate.food_of(names[0])][0][0]
     assert math.dist((lx, ly), target) < 35                             # it dips into the bowl it saw
     assert s.food_surface.est                                           # and holds a prediction for each bowl
 
